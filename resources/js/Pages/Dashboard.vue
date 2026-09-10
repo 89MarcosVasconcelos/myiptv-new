@@ -1,29 +1,31 @@
 <script setup>
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue';
-import { Head } from '@inertiajs/vue3';
+import { Head, Link } from '@inertiajs/vue3';
+
+const shortcuts = [
+  { href: 'listas.importar', title: 'Cadastrar listas', desc: 'Cole links ou importe um CSV' },
+  { href: 'listas.index', title: 'Listas carregadas', desc: 'Status, métricas e reprocessamento' },
+  { href: 'canais.index', title: 'Itens / canais', desc: 'Edição manual de metadados' },
+  { href: 'metadados.index', param: 'paises', title: 'Metadados', desc: 'País, modo, tipo, gênero, idioma, legenda' },
+  { href: 'player.show', title: 'Player', desc: 'Buscar e assistir' },
+];
 </script>
 
 <template>
-    <Head title="Dashboard" />
+    <Head title="Início" />
 
-    <AuthenticatedLayout>
-        <template #header>
-            <h2
-                class="text-xl font-semibold leading-tight text-gray-800"
-            >
-                Dashboard
-            </h2>
-        </template>
-
-        <div class="py-12">
-            <div class="mx-auto max-w-7xl sm:px-6 lg:px-8">
-                <div
-                    class="overflow-hidden bg-white shadow-sm sm:rounded-lg"
+    <AuthenticatedLayout title="Início">
+        <div class="mx-auto max-w-5xl">
+            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                <Link
+                    v-for="s in shortcuts"
+                    :key="s.title"
+                    :href="s.param ? route(s.href, s.param) : route(s.href)"
+                    class="rounded-xl border border-zinc-800 bg-zinc-900 p-5 transition hover:border-violet-500 hover:bg-zinc-800/60"
                 >
-                    <div class="p-6 text-gray-900">
-                        You're logged in!
-                    </div>
-                </div>
+                    <p class="font-medium text-white">{{ s.title }}</p>
+                    <p class="mt-1 text-sm text-zinc-400">{{ s.desc }}</p>
+                </Link>
             </div>
         </div>
     </AuthenticatedLayout>

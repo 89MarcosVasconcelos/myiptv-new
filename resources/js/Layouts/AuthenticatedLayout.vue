@@ -1,250 +1,144 @@
 <script setup>
-import { ref } from 'vue';
-import ApplicationLogo from '@/Components/ApplicationLogo.vue';
-import Dropdown from '@/Components/Dropdown.vue';
-import DropdownLink from '@/Components/DropdownLink.vue';
-import NavLink from '@/Components/NavLink.vue';
-import ResponsiveNavLink from '@/Components/ResponsiveNavLink.vue';
-import { Link } from '@inertiajs/vue3';
+import { ref } from 'vue'
+import { Link } from '@inertiajs/vue3'
 
-const showingNavigationDropdown = ref(false);
+defineProps({ title: { type: String, default: '' } })
+
+const sidebarOpen = ref(false)
+const metadataOpen = ref(false)
+
+const metadataLinks = [
+  { type: 'paises', label: 'Países' },
+  { type: 'modos', label: 'Modos' },
+  { type: 'tipos', label: 'Tipos' },
+  { type: 'generos', label: 'Gêneros' },
+  { type: 'idiomas', label: 'Idiomas' },
+  { type: 'legendas', label: 'Legendas' },
+]
+
+function isCurrent(name) {
+  return route().current(name)
+}
 </script>
 
 <template>
-    <div>
-        <div class="min-h-screen bg-gray-100">
-            <nav
-                class="border-b border-gray-100 bg-white"
-            >
-                <!-- Primary Navigation Menu -->
-                <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-                    <div class="flex h-16 justify-between">
-                        <div class="flex">
-                            <!-- Logo -->
-                            <div class="flex shrink-0 items-center">
-                                <Link :href="route('dashboard')">
-                                    <ApplicationLogo
-                                        class="block h-9 w-auto fill-current text-gray-800"
-                                    />
-                                </Link>
-                            </div>
+  <div class="min-h-screen bg-zinc-950 text-zinc-100">
+    <!-- Overlay mobile -->
+    <div
+      v-if="sidebarOpen"
+      class="fixed inset-0 z-30 bg-black/60 md:hidden"
+      @click="sidebarOpen = false"
+    />
 
-                            <!-- Navigation Links -->
-                            <div
-                                class="hidden space-x-8 sm:-my-px sm:ms-10 sm:flex"
-                            >
-                                <NavLink
-                                    :href="route('dashboard')"
-                                    :active="route().current('dashboard')"
-                                >
-                                    Dashboard
-                                </NavLink>
-                                <NavLink
-                                    :href="route('listas.importar')"
-                                    :active="route().current('listas.importar')"
-                                >
-                                    Cadastrar listas
-                                </NavLink>
-                                <NavLink
-                                    :href="route('listas.index')"
-                                    :active="route().current('listas.index')"
-                                >
-                                    Listas
-                                </NavLink>
-                                <NavLink
-                                    :href="route('canais.index')"
-                                    :active="route().current('canais.index')"
-                                >
-                                    Itens
-                                </NavLink>
-                                <Dropdown align="left" width="48">
-                                    <template #trigger>
-                                        <button
-                                            type="button"
-                                            class="inline-flex items-center border-b-2 border-transparent px-1 pt-1 text-sm font-medium leading-5 text-gray-500 hover:border-gray-300 hover:text-gray-700"
-                                        >
-                                            Metadados
-                                        </button>
-                                    </template>
-                                    <template #content>
-                                        <DropdownLink :href="route('metadados.index', 'paises')">Países</DropdownLink>
-                                        <DropdownLink :href="route('metadados.index', 'modos')">Modos</DropdownLink>
-                                        <DropdownLink :href="route('metadados.index', 'tipos')">Tipos</DropdownLink>
-                                        <DropdownLink :href="route('metadados.index', 'generos')">Gêneros</DropdownLink>
-                                        <DropdownLink :href="route('metadados.index', 'idiomas')">Idiomas</DropdownLink>
-                                        <DropdownLink :href="route('metadados.index', 'legendas')">Legendas</DropdownLink>
-                                    </template>
-                                </Dropdown>
-                                <NavLink
-                                    :href="route('player.show')"
-                                    :active="route().current('player.show')"
-                                >
-                                    Player
-                                </NavLink>
-                            </div>
-                        </div>
-
-                        <div class="hidden sm:ms-6 sm:flex sm:items-center">
-                            <!-- Settings Dropdown -->
-                            <div class="relative ms-3">
-                                <Dropdown align="right" width="48">
-                                    <template #trigger>
-                                        <span class="inline-flex rounded-md">
-                                            <button
-                                                type="button"
-                                                class="inline-flex items-center rounded-md border border-transparent bg-white px-3 py-2 text-sm font-medium leading-4 text-gray-500 transition duration-150 ease-in-out hover:text-gray-700 focus:outline-none"
-                                            >
-                                                {{ $page.props.auth.user.name }}
-
-                                                <svg
-                                                    class="-me-0.5 ms-2 h-4 w-4"
-                                                    xmlns="http://www.w3.org/2000/svg"
-                                                    viewBox="0 0 20 20"
-                                                    fill="currentColor"
-                                                >
-                                                    <path
-                                                        fill-rule="evenodd"
-                                                        d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"
-                                                        clip-rule="evenodd"
-                                                    />
-                                                </svg>
-                                            </button>
-                                        </span>
-                                    </template>
-
-                                    <template #content>
-                                        <DropdownLink
-                                            :href="route('profile.edit')"
-                                        >
-                                            Profile
-                                        </DropdownLink>
-                                        <DropdownLink
-                                            :href="route('logout')"
-                                            method="post"
-                                            as="button"
-                                        >
-                                            Log Out
-                                        </DropdownLink>
-                                    </template>
-                                </Dropdown>
-                            </div>
-                        </div>
-
-                        <!-- Hamburger -->
-                        <div class="-me-2 flex items-center sm:hidden">
-                            <button
-                                @click="
-                                    showingNavigationDropdown =
-                                        !showingNavigationDropdown
-                                "
-                                class="inline-flex items-center justify-center rounded-md p-2 text-gray-400 transition duration-150 ease-in-out hover:bg-gray-100 hover:text-gray-500 focus:bg-gray-100 focus:text-gray-500 focus:outline-none"
-                            >
-                                <svg
-                                    class="h-6 w-6"
-                                    stroke="currentColor"
-                                    fill="none"
-                                    viewBox="0 0 24 24"
-                                >
-                                    <path
-                                        :class="{
-                                            hidden: showingNavigationDropdown,
-                                            'inline-flex':
-                                                !showingNavigationDropdown,
-                                        }"
-                                        stroke-linecap="round"
-                                        stroke-linejoin="round"
-                                        stroke-width="2"
-                                        d="M4 6h16M4 12h16M4 18h16"
-                                    />
-                                    <path
-                                        :class="{
-                                            hidden: !showingNavigationDropdown,
-                                            'inline-flex':
-                                                showingNavigationDropdown,
-                                        }"
-                                        stroke-linecap="round"
-                                        stroke-linejoin="round"
-                                        stroke-width="2"
-                                        d="M6 18L18 6M6 6l12 12"
-                                    />
-                                </svg>
-                            </button>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Responsive Navigation Menu -->
-                <div
-                    :class="{
-                        block: showingNavigationDropdown,
-                        hidden: !showingNavigationDropdown,
-                    }"
-                    class="sm:hidden"
-                >
-                    <div class="space-y-1 pb-3 pt-2">
-                        <ResponsiveNavLink
-                            :href="route('dashboard')"
-                            :active="route().current('dashboard')"
-                        >
-                            Dashboard
-                        </ResponsiveNavLink>
-                        <ResponsiveNavLink :href="route('listas.importar')">Cadastrar listas</ResponsiveNavLink>
-                        <ResponsiveNavLink :href="route('listas.index')">Listas</ResponsiveNavLink>
-                        <ResponsiveNavLink :href="route('canais.index')">Itens</ResponsiveNavLink>
-                        <ResponsiveNavLink :href="route('metadados.index', 'paises')">Metadados: Países</ResponsiveNavLink>
-                        <ResponsiveNavLink :href="route('metadados.index', 'modos')">Metadados: Modos</ResponsiveNavLink>
-                        <ResponsiveNavLink :href="route('metadados.index', 'tipos')">Metadados: Tipos</ResponsiveNavLink>
-                        <ResponsiveNavLink :href="route('metadados.index', 'generos')">Metadados: Gêneros</ResponsiveNavLink>
-                        <ResponsiveNavLink :href="route('metadados.index', 'idiomas')">Metadados: Idiomas</ResponsiveNavLink>
-                        <ResponsiveNavLink :href="route('metadados.index', 'legendas')">Metadados: Legendas</ResponsiveNavLink>
-                        <ResponsiveNavLink :href="route('player.show')">Player</ResponsiveNavLink>
-                    </div>
-
-                    <!-- Responsive Settings Options -->
-                    <div
-                        class="border-t border-gray-200 pb-1 pt-4"
-                    >
-                        <div class="px-4">
-                            <div
-                                class="text-base font-medium text-gray-800"
-                            >
-                                {{ $page.props.auth.user.name }}
-                            </div>
-                            <div class="text-sm font-medium text-gray-500">
-                                {{ $page.props.auth.user.email }}
-                            </div>
-                        </div>
-
-                        <div class="mt-3 space-y-1">
-                            <ResponsiveNavLink :href="route('profile.edit')">
-                                Profile
-                            </ResponsiveNavLink>
-                            <ResponsiveNavLink
-                                :href="route('logout')"
-                                method="post"
-                                as="button"
-                            >
-                                Log Out
-                            </ResponsiveNavLink>
-                        </div>
-                    </div>
-                </div>
-            </nav>
-
-            <!-- Page Heading -->
-            <header
-                class="bg-white shadow"
-                v-if="$slots.header"
-            >
-                <div class="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
-                    <slot name="header" />
-                </div>
-            </header>
-
-            <!-- Page Content -->
-            <main>
-                <slot />
-            </main>
+    <!-- Sidebar -->
+    <aside
+      class="fixed inset-y-0 left-0 z-40 w-64 transform border-r border-zinc-800 bg-zinc-900 transition-transform duration-200 ease-in-out md:translate-x-0"
+      :class="sidebarOpen ? 'translate-x-0' : '-translate-x-full'"
+    >
+      <div class="flex h-full flex-col">
+        <div class="flex items-center gap-2 border-b border-zinc-800 px-5 py-4">
+          <span class="flex h-8 w-8 items-center justify-center rounded-md bg-gradient-to-br from-violet-500 to-fuchsia-600 font-bold text-white">M</span>
+          <Link :href="route('dashboard')" class="text-lg font-semibold tracking-tight text-white">
+            MP<span class="text-violet-400">IPTV</span>
+          </Link>
         </div>
+
+        <nav class="flex-1 space-y-1 overflow-y-auto px-3 py-4 text-sm">
+          <Link
+            :href="route('dashboard')"
+            class="block rounded-lg px-3 py-2 font-medium transition"
+            :class="isCurrent('dashboard') ? 'bg-violet-600/20 text-violet-300' : 'text-zinc-300 hover:bg-zinc-800 hover:text-white'"
+          >
+            Início
+          </Link>
+
+          <p class="px-3 pt-4 pb-1 text-xs font-semibold uppercase tracking-wider text-zinc-500">Listas</p>
+          <Link
+            :href="route('listas.importar')"
+            class="block rounded-lg px-3 py-2 font-medium transition"
+            :class="isCurrent('listas.importar') ? 'bg-violet-600/20 text-violet-300' : 'text-zinc-300 hover:bg-zinc-800 hover:text-white'"
+          >
+            Cadastrar listas
+          </Link>
+          <Link
+            :href="route('listas.index')"
+            class="block rounded-lg px-3 py-2 font-medium transition"
+            :class="isCurrent('listas.index') ? 'bg-violet-600/20 text-violet-300' : 'text-zinc-300 hover:bg-zinc-800 hover:text-white'"
+          >
+            Listas carregadas
+          </Link>
+          <Link
+            :href="route('canais.index')"
+            class="block rounded-lg px-3 py-2 font-medium transition"
+            :class="isCurrent('canais.index') ? 'bg-violet-600/20 text-violet-300' : 'text-zinc-300 hover:bg-zinc-800 hover:text-white'"
+          >
+            Itens / canais
+          </Link>
+
+          <p class="px-3 pt-4 pb-1 text-xs font-semibold uppercase tracking-wider text-zinc-500">Metadados</p>
+          <button
+            type="button"
+            class="flex w-full items-center justify-between rounded-lg px-3 py-2 font-medium text-zinc-300 transition hover:bg-zinc-800 hover:text-white"
+            @click="metadataOpen = !metadataOpen"
+          >
+            Taxonomias
+            <svg class="h-4 w-4 transition-transform" :class="metadataOpen ? 'rotate-180' : ''" viewBox="0 0 20 20" fill="currentColor">
+              <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clip-rule="evenodd" />
+            </svg>
+          </button>
+          <div v-show="metadataOpen" class="space-y-1 pl-3">
+            <Link
+              v-for="m in metadataLinks"
+              :key="m.type"
+              :href="route('metadados.index', m.type)"
+              class="block rounded-lg px-3 py-1.5 text-sm transition"
+              :class="isCurrent('metadados.index') && $page.url.includes(m.type) ? 'bg-violet-600/20 text-violet-300' : 'text-zinc-400 hover:bg-zinc-800 hover:text-white'"
+            >
+              {{ m.label }}
+            </Link>
+          </div>
+
+          <p class="px-3 pt-4 pb-1 text-xs font-semibold uppercase tracking-wider text-zinc-500">Exibição</p>
+          <Link
+            :href="route('player.show')"
+            class="flex items-center gap-2 rounded-lg px-3 py-2 font-medium transition"
+            :class="isCurrent('player.show') ? 'bg-violet-600/20 text-violet-300' : 'text-zinc-300 hover:bg-zinc-800 hover:text-white'"
+          >
+            <svg class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor"><path d="M6.3 2.84A1.5 1.5 0 004 4.11v11.78a1.5 1.5 0 002.3 1.27l9.34-5.89a1.5 1.5 0 000-2.54L6.3 2.84z" /></svg>
+            Player
+          </Link>
+        </nav>
+
+        <div class="border-t border-zinc-800 p-3">
+          <div class="flex items-center justify-between rounded-lg px-3 py-2">
+            <div class="min-w-0">
+              <p class="truncate text-sm font-medium text-white">{{ $page.props.auth.user.name }}</p>
+              <p class="truncate text-xs text-zinc-500">{{ $page.props.auth.user.email }}</p>
+            </div>
+          </div>
+          <div class="mt-1 flex gap-2 px-3">
+            <Link :href="route('profile.edit')" class="text-xs text-zinc-400 hover:text-white">Perfil</Link>
+            <Link :href="route('logout')" method="post" as="button" class="text-xs text-zinc-400 hover:text-white">Sair</Link>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Conteudo -->
+    <div class="md:pl-64">
+      <header class="sticky top-0 z-20 flex items-center gap-3 border-b border-zinc-800 bg-zinc-950/95 px-4 py-3 backdrop-blur md:px-8">
+        <button type="button" class="text-zinc-300 md:hidden" @click="sidebarOpen = true">
+          <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
+          </svg>
+        </button>
+        <h1 v-if="title" class="text-base font-semibold text-white md:text-lg">{{ title }}</h1>
+        <slot name="header" />
+      </header>
+
+      <main class="px-4 py-6 md:px-8">
+        <slot />
+      </main>
     </div>
+  </div>
 </template>

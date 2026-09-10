@@ -1,6 +1,7 @@
 <script setup>
 import { onMounted, ref } from 'vue'
 import axios from 'axios'
+import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue'
 
 const props = defineProps({ type: String, label: String })
 
@@ -15,6 +16,7 @@ async function load() {
 }
 
 async function create() {
+  if (!newName.value || !newCode.value) return
   const payload = { name: newName.value }
   payload[usesCode ? 'code' : 'slug'] = newCode.value
   await axios.post(`/api/v1/metadata/${props.type}`, payload)
@@ -32,20 +34,38 @@ onMounted(load)
 </script>
 
 <template>
-  <div class="max-w-2xl mx-auto p-6">
-    <h1 class="text-xl font-semibold mb-4">Cadastro de {{ label }}</h1>
+  <AuthenticatedLayout :title="`Cadastro de ${label}`">
+    <div class="mx-auto max-w-2xl">
+      <div class="rounded-xl border border-zinc-800 bg-zinc-900 p-4 sm:p-6">
+        <div class="flex flex-col gap-2 sm:flex-row">
+          <input
+            v-model="newCode"
+            :placeholder="usesCode ? 'código (ex: BR)' : 'slug (ex: acao)'"
+            class="w-full rounded-md border-zinc-700 bg-zinc-800 text-sm text-zinc-100 placeholder-zinc-500 focus:border-violet-500 focus:ring-violet-500 sm:w-36"
+          />
+          <input
+            v-model="newName"
+            placeholder="nome"
+            class="w-full flex-1 rounded-md border-zinc-700 bg-zinc-800 text-sm text-zinc-100 placeholder-zinc-500 focus:border-violet-500 focus:ring-violet-500"
+          />
+          <button class="w-full rounded-md bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-500 sm:w-auto" @click="create">
+            Adicionar
+          </button>
+        </div>
+      </div>
 
-    <div class="flex gap-2 mb-6">
-      <input v-model="newCode" :placeholder="usesCode ? 'código (ex: BR)' : 'slug (ex: acao)'" class="border rounded px-2 py-1 w-32" />
-      <input v-model="newName" placeholder="nome" class="border rounded px-2 py-1 flex-1" />
-      <button class="bg-blue-600 text-white px-3 py-1 rounded" @click="create">Adicionar</button>
+      <ul class="mt-4 divide-y divide-zinc-800 rounded-xl border border-zinc-800 bg-zinc-900">
+        <li v-for="item in items" :key="item.id" class="flex items-center justify-between px-4 py-3">
+          <span class="text-zinc-200">
+            {{ item.name }}
+            <span class="ml-1 text-xs text-zinc-500">({{ item.code ?? item.slug }})</span>
+          </span>
+          <button class="text-xs text-red-400 hover:text-red-300" @click="remove(item)">remover</button>
+        </li>
+        <li v-if="items.length === 0" class="px-4 py-6 text-center text-sm text-zinc-500">
+          Nenhum registro ainda.
+        </li>
+      </ul>
     </div>
-
-    <ul class="divide-y">
-      <li v-for="item in items" :key="item.id" class="flex justify-between py-2">
-        <span>{{ item.name }} <span class="text-gray-400 text-sm">({{ item.code ?? item.slug }})</span></span>
-        <button class="text-red-600 text-sm" @click="remove(item)">remover</button>
-      </li>
-    </ul>
-  </div>
+  </AuthenticatedLayout>
 </template>
