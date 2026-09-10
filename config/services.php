@@ -18,6 +18,20 @@ return [
         'key' => env('POSTMARK_API_KEY'),
     ],
 
+    /*
+    | Caminho do binario do ffprobe usado na verificacao de canais
+    | (ValidateChannelsJob). Padrao 'ffprobe' assume que esta no PATH do
+    | processo que roda o "php artisan queue:work" — no Windows isso costuma
+    | falhar quando o ffmpeg so foi adicionado ao PATH do Git Bash/MSYS
+    | (formato /c/ffmpeg/bin), que processos nativos do Windows nao entendem.
+    | Se aparecer o erro "nao e reconhecido como um comando interno ou
+    | externo...", defina FFPROBE_PATH no .env com o caminho completo, ex.:
+    | FFPROBE_PATH="C:\\ffmpeg\\bin\\ffprobe.exe"
+    */
+    'ffprobe' => [
+        'path' => env('FFPROBE_PATH', 'ffprobe'),
+    ],
+
     'resend' => [
         'key' => env('RESEND_API_KEY'),
     ],

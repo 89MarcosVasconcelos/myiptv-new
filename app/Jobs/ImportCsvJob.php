@@ -12,6 +12,7 @@ use App\Models\Subtitle;
 use Illuminate\Bus\Batchable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
+use Illuminate\Bus\Queueable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\DB;
@@ -29,7 +30,7 @@ use Illuminate\Support\Facades\Storage;
  */
 class ImportCsvJob implements ShouldQueue
 {
-    use Batchable, Dispatchable, InteractsWithQueue, SerializesModels;
+    use Batchable, Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     private const CHUNK = 1000;
 
@@ -53,7 +54,7 @@ class ImportCsvJob implements ShouldQueue
         $header = null;
         $now = now();
         $buffer = [];
-        $channelIds = [];
+        $genresByHash = []; // url_hash => [genre_id, ...] — genero e N-pra-N, resolvido a parte
         $seenHashes = [];
         $total = 0;
 
@@ -84,7 +85,6 @@ class ImportCsvJob implements ShouldQueue
                 'country_id' => $lookup['country'][$this->norm($data['pais'] ?? null)] ?? null,
                 'mode_id' => $lookup['mode'][$this->norm($data['modo'] ?? null)] ?? null,
                 'content_type_id' => $lookup['content_type'][$this->norm($data['tipo'] ?? null)] ?? null,
-                'genre_id' => $lookup['genre'][$this->norm($data['genero'] ?? null)] ?? null,
                 'language_id' => $lookup['language'][$this->norm($data['idioma'] ?? null)] ?? null,
                 'subtitle_id' => $lookup['subtitle'][$this->norm($data['legenda'] ?? null)] ?? null,
                 'status' => 'pending',
@@ -93,14 +93,27 @@ class ImportCsvJob implements ShouldQueue
             ];
             $total++;
 
+            // Coluna "genero" aceita varios valores separados por virgula
+            // (ex.: "Ação, Aventura"), ja que agora um canal pode ter mais de um.
+            $genreIds = collect(explode(',', $data['genero'] ?? ''))
+                ->map(fn ($g) => $lookup['genre'][$this->norm($g)] ?? null)
+                ->filter()
+                ->unique()
+                ->values()
+                ->all();
+
+            if ($genreIds) {
+                $genresByHash[$hash] = $genreIds;
+            }
+
             if (count($buffer) >= self::CHUNK) {
-                $channelIds = array_merge($channelIds, $this->flush($buffer));
+                $this->attachGenres($this->flush($buffer), $genresByHash);
                 $buffer = [];
             }
         }
 
         if (! empty($buffer)) {
-            $channelIds = array_merge($channelIds, $this->flush($buffer));
+            $this->attachGenres($this->flush($buffer), $genresByHash);
         }
 
         fclose($handle);
@@ -119,7 +132,7 @@ class ImportCsvJob implements ShouldQueue
         $playlist->update(['status' => 'pending']);
     }
 
-    /** Insere o lote e devolve os ids gerados, na mesma ordem. */
+    /** Insere o lote e devolve um mapa url_hash => id, pra ligar o genero certo no canal certo. */
     private function flush(array $buffer): array
     {
         DB::table('channels')->insertOrIgnore($buffer);
@@ -127,8 +140,25 @@ class ImportCsvJob implements ShouldQueue
         return DB::table('channels')
             ->where('playlist_id', $this->playlistId)
             ->whereIn('url_hash', array_column($buffer, 'url_hash'))
-            ->pluck('id')
+            ->pluck('id', 'url_hash')
             ->all();
+    }
+
+    /** Grava os generos (channel_genre) do lote recem-inserido, em lote tambem. */
+    private function attachGenres(array $idsByHash, array &$genresByHash): void
+    {
+        $rows = [];
+
+        foreach ($idsByHash as $hash => $channelId) {
+            foreach ($genresByHash[$hash] ?? [] as $genreId) {
+                $rows[] = ['channel_id' => $channelId, 'genre_id' => $genreId];
+            }
+            unset($genresByHash[$hash]);
+        }
+
+        if ($rows) {
+            DB::table('channel_genre')->insertOrIgnore($rows);
+        }
     }
 
     private function norm(?string $value): ?string

@@ -32,6 +32,7 @@ Route::middleware('auth')->group(function () {
 
     Route::get('/listas/importar', [ListsController::class, 'create'])->name('listas.importar');
     Route::get('/listas', [ListsController::class, 'index'])->name('listas.index');
+    Route::get('/listas/{playlist}/erros', [ListsController::class, 'errors'])->name('listas.erros');
 
     Route::get('/canais', [ChannelsController::class, 'index'])->name('canais.index');
 
@@ -44,10 +45,17 @@ Route::middleware('auth')->group(function () {
     // install:api for feito com calma — por ora o front so autentica logado.
     Route::prefix('api/v1')->group(function () {
         Route::get('/playlists', [PlaylistController::class, 'index']);
+        Route::post('/playlists/reset-queue', [PlaylistController::class, 'resetQueue']);
+        Route::get('/playlists/{playlist}', [PlaylistController::class, 'show']);
         Route::post('/playlists', [PlaylistController::class, 'store']);
         Route::post('/playlists/{playlist}/validate', [PlaylistController::class, 'validate']);
+        Route::post('/playlists/{playlist}/cancel', [PlaylistController::class, 'cancel']);
+        Route::post('/playlists/{playlist}/reimport', [PlaylistController::class, 'reimport']);
+        Route::delete('/playlists/{playlist}', [PlaylistController::class, 'destroy']);
+        Route::get('/playlists/{playlist}/errors', [PlaylistController::class, 'errors']);
 
         Route::get('/channels', [ChannelController::class, 'index']);
+        Route::get('/channels/admin', [ChannelController::class, 'adminIndex']);
         Route::patch('/channels/{channel}', [ChannelController::class, 'update']);
         Route::post('/channels/{channel}/recheck', [ChannelController::class, 'recheck']);
 

@@ -6,6 +6,7 @@ use App\Models\ImportRun;
 use App\Models\Playlist;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
+use Illuminate\Bus\Queueable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 
@@ -17,7 +18,7 @@ use Illuminate\Queue\SerializesModels;
  */
 class FinalizeImportRunJob implements ShouldQueue
 {
-    use Dispatchable, InteractsWithQueue, SerializesModels;
+    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     public function __construct(private readonly int $importRunId, private readonly int $playlistId)
     {

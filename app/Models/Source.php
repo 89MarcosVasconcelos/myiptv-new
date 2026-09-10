@@ -8,7 +8,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Source extends Model
 {
-    protected $fillable = ['type', 'reference', 'is_catalog', 'user_id'];
+    protected $fillable = ['type', 'reference', 'import_path', 'is_catalog', 'user_id'];
 
     protected $casts = [
         'is_catalog' => 'boolean',

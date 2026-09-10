@@ -9,12 +9,14 @@ use App\Models\Playlist;
 use App\Support\SafeUrl;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
+use Illuminate\Bus\Queueable;
 use Illuminate\Http\Client\Pool;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Symfony\Component\Process\Process;
+use Symfony\Component\Process\Exception\ProcessTimedOutException;
 
 /**
  * Valida um lote de canais em PARALELO dentro do proprio processo — nao um de
@@ -26,15 +28,18 @@ use Symfony\Component\Process\Process;
  *   2) o ffprobe dos que passaram no HTTP roda em processos assincronos
  *      (Symfony Process::start(), nao bloqueante), com um teto de
  *      concorrencia pra nao estourar CPU/rede da maquina.
- * Continua rodando com um unico "php artisan queue:work" — nao precisa abrir
+ * Continua rodando com um unico "php artisan queue:work --queue=validation" — nao precisa abrir
  * mais terminal nenhum.
  */
 class ValidateChannelsJob implements ShouldQueue
 {
-    use Dispatchable, InteractsWithQueue, SerializesModels;
+    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     /** Quantos ffprobe rodando ao mesmo tempo, no maximo, por job. */
     private const FFPROBE_CONCURRENCY = 10;
+
+    /** Segundos de parede antes de matar um ffprobe que nao terminou sozinho. */
+    private const FFPROBE_WALL_TIMEOUT = 10;
 
     /**
      * @param  array<int>  $channelIds
@@ -79,10 +84,18 @@ class ValidateChannelsJob implements ShouldQueue
         }
 
         if ($playlistId && ($okCount || $failedCount)) {
+            $processedNow = $okCount + $failedCount;
+
+            // IMPORTANTE: pending_count e uma coluna BIGINT UNSIGNED. Em modo
+            // estrito (padrao do MySQL 8), "pending_count - N" e calculado
+            // ANTES do GREATEST(), entao se der negativo o MySQL lanca
+            // SQLSTATE[22003] "out of range" em vez de simplesmente truncar —
+            // o GREATEST nunca chega a ser avaliado. "col - LEAST(col, N)"
+            // nunca fica negativo, entao nao ha underflow para o MySQL barrar.
             Playlist::where('id', $playlistId)->update([
                 'ok_count' => DB::raw("ok_count + {$okCount}"),
                 'failed_count' => DB::raw("failed_count + {$failedCount}"),
-                'pending_count' => DB::raw('GREATEST(pending_count - ' . ($okCount + $failedCount) . ', 0)'),
+                'pending_count' => DB::raw("pending_count - LEAST(pending_count, {$processedNow})"),
             ]);
         }
 
@@ -104,7 +117,7 @@ class ValidateChannelsJob implements ShouldQueue
                 ->update(['status' => 'completed']);
 
             if ($won) {
-                FinalizeImportRunJob::dispatch($importRun->id, $playlistId ?? $importRun->playlist_id);
+                FinalizeImportRunJob::dispatch($importRun->id, $playlistId ?? $importRun->playlist_id)->onQueue('validation');
             }
         }
     }
@@ -190,14 +203,15 @@ class ValidateChannelsJob implements ShouldQueue
         }
 
         // 2) ffprobe dos sobreviventes, em paralelo (com teto de concorrencia).
-        foreach ($this->runFfprobePool($needsFfprobe) as $channelId => $ffprobeOk) {
+        foreach ($this->runFfprobePool($needsFfprobe) as $channelId => $ffprobeResult) {
             $info = $needsFfprobe[$channelId];
+            $ffprobeOk = $ffprobeResult['ok'];
             $results[$channelId] = [
                 'ok' => $ffprobeOk,
                 'http_status' => $info['http_status'],
                 'content_type' => $info['content_type'],
                 'ffprobe_ok' => $ffprobeOk,
-                'message' => $ffprobeOk ? null : 'ffprobe nao conseguiu abrir o stream.',
+                'message' => $ffprobeOk ? null : $this->ffprobeFailureMessage($ffprobeResult),
                 'stream_type' => $info['stream_type'],
             ];
         }
@@ -209,7 +223,7 @@ class ValidateChannelsJob implements ShouldQueue
      * Roda ffprobe pra cada entrada em $needsFfprobe com no maximo
      * self::FFPROBE_CONCURRENCY processos simultaneos (janela deslizante).
      *
-     * @return array<int, bool> channel_id => passou no ffprobe
+     * @return array<int, array{ok: bool, timed_out: bool, exit_code: ?int, stderr: string}>
      */
     private function runFfprobePool(array $needsFfprobe): array
     {
@@ -229,11 +243,29 @@ class ValidateChannelsJob implements ShouldQueue
             usleep(100_000); // 100ms
 
             foreach ($running as $channelId => $process) {
-                if ($process->isRunning()) {
-                    continue;
+                $timedOut = false;
+
+                try {
+                    // isRunning() e quem efetivamente checa o watchdog interno
+                    // do Symfony (setTimeout) e lanca a excecao quando estoura.
+                    if ($process->isRunning()) {
+                        continue;
+                    }
+                } catch (ProcessTimedOutException $e) {
+                    $timedOut = true;
+                    $process->stop(1);
                 }
 
-                $done[$channelId] = $process->isSuccessful() && trim($process->getOutput()) !== '';
+                $done[$channelId] = [
+                    'ok' => ! $timedOut && $process->isSuccessful() && trim($process->getOutput()) !== '',
+                    'timed_out' => $timedOut,
+                    'exit_code' => $timedOut ? null : $process->getExitCode(),
+                    // mb_scrub: no Windows o cmd.exe costuma devolver o texto no
+                    // codepage OEM (ex.: CP850), nao UTF-8 — sem isso, bytes
+                    // invalidos quebram tanto o preg_match quanto o INSERT no
+                    // MySQL (coluna utf8mb4 rejeita sequencia invalida).
+                    'stderr' => mb_scrub(trim($process->getErrorOutput())),
+                ];
                 unset($running[$channelId]);
             }
         }
@@ -241,9 +273,59 @@ class ValidateChannelsJob implements ShouldQueue
         return $done;
     }
 
+    /**
+     * Mensagem de erro registrada no ChannelCheck — inclui o stderr real do
+     * ffprobe (truncado) em vez de um texto generico, pra dar pra diagnosticar
+     * pela tela de log de erros sem precisar rodar o comando na mao.
+     */
+    private function ffprobeFailureMessage(array $ffprobeResult): string
+    {
+        if ($ffprobeResult['timed_out']) {
+            return 'ffprobe excedeu o tempo limite (stream muito lento pra responder ou trava no meio).';
+        }
+
+        $stderr = $ffprobeResult['stderr'];
+
+        // Padrao classico de "comando nao encontrado" (Windows CMD, PT ou EN,
+        // e o "command not found" do shell POSIX) — quando isso aparece, o
+        // ffprobe nunca chegou a rodar: nao e falha do stream, e do binario
+        // nao estar no PATH do processo do worker. Mensagem clara em vez do
+        // texto truncado do sistema operacional, e igual pra todo canal ate
+        // o FFPROBE_PATH ser configurado.
+        // Ancoras sem acento de proposito: o cmd.exe do Windows costuma
+        // devolver essas mensagens no codepage OEM (ex.: CP850), nao UTF-8, e um
+        // trecho acentuado no regex simplesmente nunca bateria com os bytes reais.
+        if (preg_match('/reconhecido como um comando|arquivo em lotes|is not recognized as an internal or external command|command not found/i', $stderr)) {
+            return 'ffprobe nao foi encontrado pelo worker (binario fora do PATH do processo). Configure FFPROBE_PATH no .env com o caminho completo do ffprobe e reinicie o "queue:work".';
+        }
+
+        if ($stderr === '') {
+            return 'ffprobe nao conseguiu abrir o stream (sem saida de erro — verifique se o codec/protocolo e suportado).';
+        }
+
+        // Fica so a ultima linha util — geralmente é a que explica o motivo
+        // real (ex.: "Server returned 403 Forbidden", "Connection refused",
+        // "Invalid data found when processing input").
+        $lines = array_values(array_filter(explode("\n", $stderr), fn ($l) => trim($l) !== ''));
+        $lastLine = end($lines) ?: $stderr;
+
+        return 'ffprobe: ' . mb_substr(trim($lastLine), 0, 300);
+    }
+
+    /** User-Agent default quando o canal nao trouxe um (#EXTVLCOPT) — varios
+     *  paineis IPTV bloqueiam/truncam o UA padrao do ffmpeg ("Lavf/x.x") mas
+     *  liberam o de players conhecidos como o VLC. */
+    private const DEFAULT_USER_AGENT = 'VLC/3.0.20 LibVLC/3.0.20';
+
     private function buildFfprobeProcess(string $url, array $headers): Process
     {
-        $args = ['ffprobe', '-v', 'error', '-timeout', '6000000'];
+        $args = [config('services.ffprobe.path', 'ffprobe'), '-v', 'error', '-timeout', '6000000'];
+
+        $hasUserAgent = collect($headers)->keys()->contains(fn ($k) => strtolower($k) === 'user-agent');
+        if (! $hasUserAgent) {
+            $args[] = '-user_agent';
+            $args[] = self::DEFAULT_USER_AGENT;
+        }
 
         if (! empty($headers)) {
             $headerLines = collect($headers)->map(fn ($v, $k) => "{$k}: {$v}")->implode("\r\n");
@@ -254,7 +336,7 @@ class ValidateChannelsJob implements ShouldQueue
         $args = array_merge($args, ['-select_streams', 'v:0', '-show_entries', 'stream=codec_type', '-of', 'csv=p=0', $url]);
 
         $process = new Process($args);
-        $process->setTimeout(10);
+        $process->setTimeout(self::FFPROBE_WALL_TIMEOUT + 2);
 
         return $process;
     }

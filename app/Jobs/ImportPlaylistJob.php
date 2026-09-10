@@ -8,6 +8,7 @@ use App\Support\SafeUrl;
 use Illuminate\Bus\Batchable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
+use Illuminate\Bus\Queueable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Http;
@@ -16,11 +17,11 @@ use Illuminate\Support\Str;
 /**
  * Baixa o link cadastrado, decide pelo Content-Type/corpo se e uma playlist M3U
  * (expande em N canais) ou midia direta (mp4/mkv/etc, vira 1 canal so) e enfileira
- * a validacao em lotes na fila "validation" (separada da "default").
+ * a validacao em lotes — TODO job da aplicacao (import, validacao, finalizacao, recheck) vai pra fila "validation", entao um unico "php artisan queue:work --queue=validation" processa a pipeline inteira.
  */
 class ImportPlaylistJob implements ShouldQueue
 {
-    use Batchable, Dispatchable, InteractsWithQueue, SerializesModels;
+    use Batchable, Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     public function __construct(private readonly Playlist $playlist)
     {
