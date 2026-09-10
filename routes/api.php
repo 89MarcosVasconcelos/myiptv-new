@@ -1,22 +1,8 @@
 <?php
 
-use App\Http\Controllers\Api\V1\ChannelController;
-use App\Http\Controllers\Api\V1\MetadataController;
-use App\Http\Controllers\Api\V1\PlaylistController;
-use Illuminate\Support\Facades\Route;
-
-// Mesmo contrato v1 para web (sessao Sanctum) e app mobile (token Sanctum).
-Route::prefix('v1')->middleware('auth:sanctum')->group(function () {
-    Route::get('/playlists', [PlaylistController::class, 'index']);
-    Route::post('/playlists', [PlaylistController::class, 'store']);
-    Route::post('/playlists/{playlist}/recheck', [PlaylistController::class, 'recheck']);
-
-    Route::get('/channels', [ChannelController::class, 'index']);
-    Route::patch('/channels/{channel}', [ChannelController::class, 'update']);
-    Route::post('/channels/{channel}/recheck', [ChannelController::class, 'recheck']);
-
-    Route::get('/metadata/{type}', [MetadataController::class, 'index']);
-    Route::post('/metadata/{type}', [MetadataController::class, 'store']);
-    Route::patch('/metadata/{type}/{id}', [MetadataController::class, 'update']);
-    Route::delete('/metadata/{type}/{id}', [MetadataController::class, 'destroy']);
-});
+// Vazio por enquanto: os endpoints /api/v1/* vivem em routes/web.php, dentro
+// do middleware "web" + "auth" (sessão), porque o scaffold do Breeze não
+// habilitou routes/api.php (bootstrap/app.php não tem a chave "api") e o
+// Sanctum não foi instalado com "php artisan install:api". Quando o app
+// mobile (Fase 3) precisar de autenticação por token, faz esse setup e move
+// as rotas de volta pra cá com o guard "auth:sanctum".
