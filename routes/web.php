@@ -20,4 +20,6 @@ Route::middleware(['auth'])->group(function () {
     Route::get('/player', [PlayerController::class, 'show'])->name('player.show');
 });
 
-require __DIR__ . '/auth.php';
+if (file_exists(__DIR__.'/auth.php')) {
+    require __DIR__.'/auth.php';
+}
