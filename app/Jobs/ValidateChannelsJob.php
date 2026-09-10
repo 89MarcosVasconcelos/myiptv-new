@@ -7,29 +7,34 @@ use App\Models\ChannelCheck;
 use App\Models\ImportRun;
 use App\Models\Playlist;
 use App\Support\SafeUrl;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
+use Illuminate\Http\Client\Pool;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Facades\Process;
+use Symfony\Component\Process\Process;
 
 /**
- * Valida um lote de canais: 200 OK no probe HTTP nao basta (muito servidor de IPTV
- * mente), entao o ffprobe confirma se o stream realmente abre. Roda na fila
- * "validation" para nao competir com a "default" numa importacao grande.
- *
- * Sem Bus::batch aqui de proposito: pra importacoes de milhares de canais, o
- * batch guarda um closure serializado com o estado de progresso e isso
- * chegou a estourar o memory_limit do PHP. Em vez disso, cada job atualiza os
- * contadores da playlist e do import_run diretamente (dá a barra de progresso
- * em tempo real de graca) e o ULTIMO job a terminar (processed >= total)
- * finaliza o import_run sozinho.
+ * Valida um lote de canais em PARALELO dentro do proprio processo — nao um de
+ * cada vez. O gargalo nunca foi a linguagem (PHP vs Python): era o loop
+ * sequencial esperando cada requisicao terminar antes de comecar a proxima.
+ * Aqui:
+ *   1) todas as sondas HTTP do lote disparam juntas via Http::pool() (um
+ *      unico curl_multi por baixo, sem thread nem terminal extra);
+ *   2) o ffprobe dos que passaram no HTTP roda em processos assincronos
+ *      (Symfony Process::start(), nao bloqueante), com um teto de
+ *      concorrencia pra nao estourar CPU/rede da maquina.
+ * Continua rodando com um unico "php artisan queue:work" — nao precisa abrir
+ * mais terminal nenhum.
  */
 class ValidateChannelsJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, SerializesModels;
+
+    /** Quantos ffprobe rodando ao mesmo tempo, no maximo, por job. */
+    private const FFPROBE_CONCURRENCY = 10;
 
     /**
      * @param  array<int>  $channelIds
@@ -45,11 +50,13 @@ class ValidateChannelsJob implements ShouldQueue
         $channels = Channel::whereIn('id', $this->channelIds)->get();
         $playlistId = $channels->first()?->playlist_id;
 
+        $results = $this->probeAll($channels);
+
         $okCount = 0;
         $failedCount = 0;
 
         foreach ($channels as $channel) {
-            $result = $this->validateChannel($channel);
+            $result = $results[$channel->id];
 
             ChannelCheck::create([
                 'channel_id' => $channel->id,
@@ -102,60 +109,139 @@ class ValidateChannelsJob implements ShouldQueue
         }
     }
 
-    private function validateChannel(Channel $channel): array
+    /**
+     * @return array<int, array> resultado final por channel_id (ja com ffprobe
+     *                           quando aplicavel)
+     */
+    private function probeAll($channels): array
     {
-        if (! SafeUrl::isAllowed($channel->url)) {
-            return ['ok' => false, 'http_status' => null, 'content_type' => null, 'ffprobe_ok' => null, 'message' => 'URL recusada (SSRF).'];
+        $results = [];
+        $toHttpProbe = [];
+
+        // Filtra de cara quem nem chega a fazer request (SSRF, youtube).
+        foreach ($channels as $channel) {
+            if (! SafeUrl::isAllowed($channel->url)) {
+                $results[$channel->id] = $this->fail('URL recusada (SSRF).');
+                continue;
+            }
+
+            if (preg_match('#youtube\.com|youtu\.be#i', $channel->url)) {
+                $results[$channel->id] = [
+                    'ok' => true, 'http_status' => null, 'content_type' => 'youtube',
+                    'ffprobe_ok' => null, 'message' => null, 'stream_type' => 'youtube',
+                ];
+                continue;
+            }
+
+            $toHttpProbe[] = $channel;
         }
 
-        // YouTube live nao passa por HTTP probe/ffprobe: e valido, mas o player usa embed.
-        if (preg_match('#youtube\.com|youtu\.be#i', $channel->url)) {
-            return ['ok' => true, 'http_status' => null, 'content_type' => 'youtube', 'ffprobe_ok' => null, 'message' => null, 'stream_type' => 'youtube'];
+        if (empty($toHttpProbe)) {
+            return $results;
         }
 
-        try {
-            $headers = $channel->http_headers ?? [];
-            $response = Http::withHeaders($headers)->timeout(6)->connectTimeout(4)->withOptions(['stream' => true])
-                ->withHeaders(['Range' => 'bytes=0-2048'])
-                ->get($channel->url);
-        } catch (\Throwable $e) {
-            return ['ok' => false, 'http_status' => null, 'content_type' => null, 'ffprobe_ok' => null, 'message' => $e->getMessage()];
+        // 1) Todas as sondas HTTP do lote, de uma vez (curl_multi por baixo).
+        $responses = Http::pool(fn (Pool $pool) => collect($toHttpProbe)->map(
+            fn ($c) => $pool->as((string) $c->id)
+                ->withHeaders(array_merge($c->http_headers ?? [], ['Range' => 'bytes=0-2048']))
+                ->timeout(6)->connectTimeout(4)
+                ->withOptions(['stream' => true])
+                ->get($c->url)
+        )->all());
+
+        $needsFfprobe = []; // channel_id => [channel, headers]
+
+        foreach ($toHttpProbe as $channel) {
+            $response = $responses[(string) $channel->id];
+
+            if ($response instanceof \Throwable) {
+                $results[$channel->id] = $this->fail($response->getMessage());
+                continue;
+            }
+
+            $contentType = $response->header('Content-Type', '');
+            $httpOk = $response->successful() || $response->status() === 206;
+
+            if (! $httpOk) {
+                $results[$channel->id] = $this->fail("HTTP {$response->status()}", $response->status(), $contentType);
+                continue;
+            }
+
+            if (str_contains($contentType, 'text/html')) {
+                $results[$channel->id] = $this->fail('Content-Type text/html (provavelmente pagina, nao stream).', $response->status(), $contentType);
+                continue;
+            }
+
+            $streamType = match (true) {
+                str_contains($contentType, 'mpegurl') => 'hls',
+                str_contains($contentType, 'mp4') => 'mp4',
+                str_contains($contentType, 'matroska') => 'mkv',
+                str_ends_with($channel->url, '.m3u8') => 'hls',
+                str_ends_with($channel->url, '.mp4') => 'mp4',
+                default => 'unknown',
+            };
+
+            $needsFfprobe[$channel->id] = [
+                'channel' => $channel,
+                'http_status' => $response->status(),
+                'content_type' => $contentType,
+                'stream_type' => $streamType,
+            ];
         }
 
-        $contentType = $response->header('Content-Type', '');
-        $httpOk = $response->successful() || $response->status() === 206;
-
-        if (! $httpOk) {
-            return ['ok' => false, 'http_status' => $response->status(), 'content_type' => $contentType, 'ffprobe_ok' => null, 'message' => "HTTP {$response->status()}"];
+        // 2) ffprobe dos sobreviventes, em paralelo (com teto de concorrencia).
+        foreach ($this->runFfprobePool($needsFfprobe) as $channelId => $ffprobeOk) {
+            $info = $needsFfprobe[$channelId];
+            $results[$channelId] = [
+                'ok' => $ffprobeOk,
+                'http_status' => $info['http_status'],
+                'content_type' => $info['content_type'],
+                'ffprobe_ok' => $ffprobeOk,
+                'message' => $ffprobeOk ? null : 'ffprobe nao conseguiu abrir o stream.',
+                'stream_type' => $info['stream_type'],
+            ];
         }
 
-        // resolve o stream_type pelo Content-Type quando a URL nao tem extensao (comum no Free-TV)
-        $streamType = match (true) {
-            str_contains($contentType, 'mpegurl') => 'hls',
-            str_contains($contentType, 'mp4') => 'mp4',
-            str_contains($contentType, 'matroska') => 'mkv',
-            str_ends_with($channel->url, '.m3u8') => 'hls',
-            str_ends_with($channel->url, '.mp4') => 'mp4',
-            default => 'unknown',
-        };
-
-        if (str_contains($contentType, 'text/html')) {
-            return ['ok' => false, 'http_status' => $response->status(), 'content_type' => $contentType, 'ffprobe_ok' => null, 'message' => 'Content-Type text/html (provavelmente pagina, nao stream).'];
-        }
-
-        $ffprobeOk = $this->ffprobeCanOpen($channel->url, $headers);
-
-        return [
-            'ok' => $ffprobeOk,
-            'http_status' => $response->status(),
-            'content_type' => $contentType,
-            'ffprobe_ok' => $ffprobeOk,
-            'message' => $ffprobeOk ? null : 'ffprobe nao conseguiu abrir o stream.',
-            'stream_type' => $streamType,
-        ];
+        return $results;
     }
 
-    private function ffprobeCanOpen(string $url, array $headers): bool
+    /**
+     * Roda ffprobe pra cada entrada em $needsFfprobe com no maximo
+     * self::FFPROBE_CONCURRENCY processos simultaneos (janela deslizante).
+     *
+     * @return array<int, bool> channel_id => passou no ffprobe
+     */
+    private function runFfprobePool(array $needsFfprobe): array
+    {
+        $queue = array_values($needsFfprobe);
+        $running = []; // channel_id => Process
+        $done = [];
+
+        while (! empty($queue) || ! empty($running)) {
+            while (count($running) < self::FFPROBE_CONCURRENCY && ! empty($queue)) {
+                $info = array_shift($queue);
+                $channel = $info['channel'];
+                $process = $this->buildFfprobeProcess($channel->url, $channel->http_headers ?? []);
+                $process->start();
+                $running[$channel->id] = $process;
+            }
+
+            usleep(100_000); // 100ms
+
+            foreach ($running as $channelId => $process) {
+                if ($process->isRunning()) {
+                    continue;
+                }
+
+                $done[$channelId] = $process->isSuccessful() && trim($process->getOutput()) !== '';
+                unset($running[$channelId]);
+            }
+        }
+
+        return $done;
+    }
+
+    private function buildFfprobeProcess(string $url, array $headers): Process
     {
         $args = ['ffprobe', '-v', 'error', '-timeout', '6000000'];
 
@@ -167,8 +253,20 @@ class ValidateChannelsJob implements ShouldQueue
 
         $args = array_merge($args, ['-select_streams', 'v:0', '-show_entries', 'stream=codec_type', '-of', 'csv=p=0', $url]);
 
-        $result = Process::timeout(8)->run($args);
+        $process = new Process($args);
+        $process->setTimeout(10);
 
-        return $result->successful() && trim($result->output()) !== '';
+        return $process;
+    }
+
+    private function fail(string $message, ?int $httpStatus = null, ?string $contentType = null): array
+    {
+        return [
+            'ok' => false,
+            'http_status' => $httpStatus,
+            'content_type' => $contentType,
+            'ffprobe_ok' => null,
+            'message' => $message,
+        ];
     }
 }
