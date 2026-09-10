@@ -45,7 +45,7 @@ Route::middleware('auth')->group(function () {
     Route::prefix('api/v1')->group(function () {
         Route::get('/playlists', [PlaylistController::class, 'index']);
         Route::post('/playlists', [PlaylistController::class, 'store']);
-        Route::post('/playlists/{playlist}/recheck', [PlaylistController::class, 'recheck']);
+        Route::post('/playlists/{playlist}/validate', [PlaylistController::class, 'validate']);
 
         Route::get('/channels', [ChannelController::class, 'index']);
         Route::patch('/channels/{channel}', [ChannelController::class, 'update']);

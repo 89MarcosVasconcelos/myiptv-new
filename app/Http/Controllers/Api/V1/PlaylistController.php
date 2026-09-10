@@ -5,6 +5,8 @@ namespace App\Http\Controllers\Api\V1;
 use App\Http\Controllers\Controller;
 use App\Jobs\ImportCsvJob;
 use App\Jobs\ImportPlaylistJob;
+use App\Jobs\ValidateChannelsJob;
+use App\Models\ImportRun;
 use App\Models\Playlist;
 use App\Models\Source;
 use Illuminate\Http\Request;
@@ -94,12 +96,34 @@ class PlaylistController extends Controller
         return response()->json(['created' => count($created), 'playlists' => $created], 202);
     }
 
-    /** POST /api/v1/playlists/{playlist}/recheck — botao "reavaliar" da lista inteira */
-    public function recheck(Playlist $playlist)
+    /**
+     * POST /api/v1/playlists/{playlist}/validate
+     * Botao manual "Iniciar verificacao" / "Reprocessar" — importar nunca
+     * dispara isso sozinho. Valida (probe HTTP + ffprobe) todo canal que
+     * ainda nao esta "ok": pending (primeira vez) e failed/dead (reavaliar).
+     */
+    public function validate(Playlist $playlist)
     {
-        $playlist->update(['status' => 'pending']);
-        ImportPlaylistJob::dispatch($playlist);
+        $channelIds = $playlist->channels()
+            ->whereIn('status', ['pending', 'failed', 'dead'])
+            ->pluck('id');
 
-        return response()->json(['status' => 'queued']);
+        if ($channelIds->isEmpty()) {
+            return response()->json(['message' => 'Nao ha canais pendentes ou com falha para verificar.'], 422);
+        }
+
+        $importRun = ImportRun::create([
+            'playlist_id' => $playlist->id,
+            'status' => 'processing',
+            'total' => $channelIds->count(),
+        ]);
+
+        $playlist->update(['status' => 'processing']);
+
+        $channelIds->chunk(50)->each(
+            fn ($chunk) => ValidateChannelsJob::dispatch($chunk->values()->all(), $importRun->id)->onQueue('validation')
+        );
+
+        return response()->json(['status' => 'queued', 'total' => $channelIds->count()]);
     }
 }

@@ -5,8 +5,9 @@ namespace App\Jobs;
 use App\Models\Channel;
 use App\Models\ChannelCheck;
 use App\Models\ImportRun;
+use App\Models\Playlist;
 use App\Support\SafeUrl;
-use Illuminate\Bus\Batchable;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
@@ -18,10 +19,17 @@ use Illuminate\Support\Facades\Process;
  * Valida um lote de canais: 200 OK no probe HTTP nao basta (muito servidor de IPTV
  * mente), entao o ffprobe confirma se o stream realmente abre. Roda na fila
  * "validation" para nao competir com a "default" numa importacao grande.
+ *
+ * Sem Bus::batch aqui de proposito: pra importacoes de milhares de canais, o
+ * batch guarda um closure serializado com o estado de progresso e isso
+ * chegou a estourar o memory_limit do PHP. Em vez disso, cada job atualiza os
+ * contadores da playlist e do import_run diretamente (dá a barra de progresso
+ * em tempo real de graca) e o ULTIMO job a terminar (processed >= total)
+ * finaliza o import_run sozinho.
  */
 class ValidateChannelsJob implements ShouldQueue
 {
-    use Batchable, Dispatchable, InteractsWithQueue, SerializesModels;
+    use Dispatchable, InteractsWithQueue, SerializesModels;
 
     /**
      * @param  array<int>  $channelIds
@@ -34,9 +42,13 @@ class ValidateChannelsJob implements ShouldQueue
 
     public function handle(): void
     {
-        $importRun = ImportRun::find($this->importRunId);
+        $channels = Channel::whereIn('id', $this->channelIds)->get();
+        $playlistId = $channels->first()?->playlist_id;
 
-        foreach (Channel::whereIn('id', $this->channelIds)->get() as $channel) {
+        $okCount = 0;
+        $failedCount = 0;
+
+        foreach ($channels as $channel) {
             $result = $this->validateChannel($channel);
 
             ChannelCheck::create([
@@ -56,8 +68,37 @@ class ValidateChannelsJob implements ShouldQueue
                 'last_checked_at' => now(),
             ]);
 
-            $importRun?->increment('processed');
-            $importRun?->increment($result['ok'] ? 'ok' : 'failed');
+            $result['ok'] ? $okCount++ : $failedCount++;
+        }
+
+        if ($playlistId && ($okCount || $failedCount)) {
+            Playlist::where('id', $playlistId)->update([
+                'ok_count' => DB::raw("ok_count + {$okCount}"),
+                'failed_count' => DB::raw("failed_count + {$failedCount}"),
+                'pending_count' => DB::raw('GREATEST(pending_count - ' . ($okCount + $failedCount) . ', 0)'),
+            ]);
+        }
+
+        $importRun = ImportRun::find($this->importRunId);
+        if (! $importRun) {
+            return;
+        }
+
+        $importRun->increment('processed', $okCount + $failedCount);
+        $importRun->increment('ok', $okCount);
+        $importRun->increment('failed', $failedCount);
+        $importRun->refresh();
+
+        // "Ultimo job a sair apaga a luz": so um vence essa corrida porque o
+        // UPDATE com WHERE status != completed so afeta 1 linha uma vez.
+        if ($importRun->processed >= $importRun->total) {
+            $won = ImportRun::where('id', $importRun->id)
+                ->where('status', '!=', 'completed')
+                ->update(['status' => 'completed']);
+
+            if ($won) {
+                FinalizeImportRunJob::dispatch($importRun->id, $playlistId ?? $importRun->playlist_id);
+            }
         }
     }
 
@@ -74,7 +115,7 @@ class ValidateChannelsJob implements ShouldQueue
 
         try {
             $headers = $channel->http_headers ?? [];
-            $response = Http::withHeaders($headers)->timeout(15)->withOptions(['stream' => true])
+            $response = Http::withHeaders($headers)->timeout(6)->connectTimeout(4)->withOptions(['stream' => true])
                 ->withHeaders(['Range' => 'bytes=0-2048'])
                 ->get($channel->url);
         } catch (\Throwable $e) {
@@ -116,7 +157,7 @@ class ValidateChannelsJob implements ShouldQueue
 
     private function ffprobeCanOpen(string $url, array $headers): bool
     {
-        $args = ['ffprobe', '-v', 'error', '-timeout', '10000000'];
+        $args = ['ffprobe', '-v', 'error', '-timeout', '6000000'];
 
         if (! empty($headers)) {
             $headerLines = collect($headers)->map(fn ($v, $k) => "{$k}: {$v}")->implode("\r\n");
@@ -126,7 +167,7 @@ class ValidateChannelsJob implements ShouldQueue
 
         $args = array_merge($args, ['-select_streams', 'v:0', '-show_entries', 'stream=codec_type', '-of', 'csv=p=0', $url]);
 
-        $result = Process::timeout(15)->run($args);
+        $result = Process::timeout(8)->run($args);
 
         return $result->successful() && trim($result->output()) !== '';
     }

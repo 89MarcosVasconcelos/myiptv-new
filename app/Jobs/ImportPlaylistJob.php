@@ -3,7 +3,6 @@
 namespace App\Jobs;
 
 use App\Models\Channel;
-use App\Models\ImportRun;
 use App\Models\Playlist;
 use App\Support\SafeUrl;
 use Illuminate\Bus\Batchable;
@@ -11,7 +10,6 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
-use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 
@@ -81,21 +79,11 @@ class ImportPlaylistJob implements ShouldQueue
 
         $this->playlist->refreshCounters();
 
-        $importRun = ImportRun::create([
-            'playlist_id' => $this->playlist->id,
-            'status' => 'processing',
-            'total' => count($channelIds),
-        ]);
-
-        $jobs = collect($channelIds)
-            ->chunk(50)
-            ->map(fn ($chunk) => new ValidateChannelsJob($chunk->all(), $importRun->id))
-            ->all();
-
-        Bus::batch($jobs)
-            ->onQueue('validation')
-            ->finally(fn () => FinalizeImportRunJob::dispatch($importRun->id, $this->playlist->id))
-            ->dispatch();
+        // Importar so baixa/expande a lista e cria os canais (status
+        // "pending"). A validacao (probe HTTP + ffprobe) e disparada
+        // manualmente pelo botao "Iniciar verificacao" na tela de listas —
+        // ver PlaylistController::validate().
+        $this->playlist->update(['status' => 'pending']);
     }
 
     /**

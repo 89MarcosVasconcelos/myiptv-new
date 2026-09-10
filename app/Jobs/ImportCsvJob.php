@@ -5,7 +5,6 @@ namespace App\Jobs;
 use App\Models\ContentType;
 use App\Models\Country;
 use App\Models\Genre;
-use App\Models\ImportRun;
 use App\Models\Language;
 use App\Models\Mode;
 use App\Models\Playlist;
@@ -15,7 +14,6 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
-use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 
@@ -115,21 +113,10 @@ class ImportCsvJob implements ShouldQueue
             return;
         }
 
-        $importRun = ImportRun::create([
-            'playlist_id' => $this->playlistId,
-            'status' => 'processing',
-            'total' => $total,
-        ]);
-
-        $jobs = collect($channelIds)
-            ->chunk(50)
-            ->map(fn ($chunk) => new ValidateChannelsJob($chunk->all(), $importRun->id))
-            ->all();
-
-        Bus::batch($jobs)
-            ->onQueue('validation')
-            ->finally(fn () => FinalizeImportRunJob::dispatch($importRun->id, $this->playlistId))
-            ->dispatch();
+        // Importar so cria os canais (status "pending"). A validacao (probe
+        // HTTP + ffprobe) e disparada manualmente pelo botao "Iniciar
+        // verificacao" na tela de listas — ver PlaylistController::validate().
+        $playlist->update(['status' => 'pending']);
     }
 
     /** Insere o lote e devolve os ids gerados, na mesma ordem. */
