@@ -1,0 +1,63 @@
+name: Deploy
+
+# Roda a cada push na main — que e a branch de backup/producao do projeto.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+jobs:
+  verify:
+    name: Verificar codigo
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configurar PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.3"
+          extensions: pdo_mysql, gd, zip, intl, mbstring, bcmath, pcntl, opcache
+          coverage: none
+
+      - name: Instalar dependencias PHP
+        run: composer install --no-dev --optimize-autoloader --no-interaction --no-progress
+
+      - name: Checar sintaxe PHP
+        run: |
+          find app database routes config -name "*.php" -print0 | xargs -0 -n1 php -l
+
+      - name: Configurar Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Instalar dependencias JS
+        run: npm ci
+
+      - name: Build dos assets (Vite)
+        run: npm run build
+
+  deploy:
+    name: Disparar deploy no Coolify
+    needs: verify
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    steps:
+      # O Coolify e quem builda a imagem Docker e sobe os containers — este
+      # job so avisa ele (via webhook) que ha um commit novo na main pra
+      # puxar. Nao builda nem envia imagem nenhuma daqui.
+      #
+      # Secrets necessarios (criar em Settings > Secrets and variables >
+      # Actions deste repositorio, com os valores do painel do Coolify):
+      #   COOLIFY_WEBHOOK_URL -> Application > Webhooks (contem o UUID do
+      #                          recurso)
+      #   COOLIFY_TOKEN       -> Keys & Tokens, no seu perfil do Coolify
+      - name: Chamar webhook de deploy do Coolify
+        run: |
+          curl --fail --silent --show-error \
+            --request GET \
+            --header "Authorization: Bearer ${{ secrets.COOLIFY_TOKEN }}" \
+            "${{ secrets.COOLIFY_WEBHOOK_URL }}"

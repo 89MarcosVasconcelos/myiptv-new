@@ -1,0 +1,53 @@
+version: "3.8"
+
+# Dois serviços a partir da MESMA imagem — só muda o "command":
+#   app    -> nginx + php-fpm (recebe o trafego HTTP; e o que o Coolify
+#             deve apontar como "porta exposta" pro dominio)
+#   worker -> php artisan queue:work, sempre rodando (equivalente ao servico
+#             IptvQueueWorker do Windows, so que aqui quem reinicia sozinho
+#             em caso de crash e o "restart: unless-stopped" do Docker)
+#
+# Banco de dados (MySQL) e deixado FORA deste compose de proposito — o ideal
+# no Coolify e criar um recurso de banco separado (ele cuida de backup
+# automatico), e so apontar DB_HOST/DB_PASSWORD etc. nas variaveis de
+# ambiente da aplicacao. Ver .env.example.
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["app"]
+    restart: unless-stopped
+    expose:
+      - "8080"
+    env_file:
+      - .env
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/up"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    volumes:
+      - storage:/var/www/html/storage
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["worker"]
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      - app
+    volumes:
+      - storage:/var/www/html/storage
+
+# Volume nomeado compartilhado entre "app" e "worker": e onde ficam os CSVs
+# enviados (storage/app/...) e os logs (storage/logs/laravel.log) — sem isso,
+# o worker (container separado) nao enxergaria o arquivo que o "app" acabou
+# de salvar no upload, e o ImportCsvJob falharia dizendo que o CSV nao existe.
+volumes:
+  storage:

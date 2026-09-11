@@ -1,0 +1,42 @@
+# Tudo que nao precisa (ou nao pode) ir pra dentro da imagem — o Dockerfile
+# gera vendor/ e public/build de novo dentro do build, e node_modules nunca
+# precisa existir na imagem final (so durante o estagio de build do Vite).
+.git
+.gitignore
+.gitattributes
+.github
+
+node_modules
+vendor
+public/build
+public/hot
+
+storage/app/*
+storage/framework/cache/*
+storage/framework/sessions/*
+storage/framework/views/*
+storage/logs/*
+!storage/app/.gitignore
+!storage/framework/cache/.gitignore
+!storage/framework/sessions/.gitignore
+!storage/framework/views/.gitignore
+!storage/logs/.gitignore
+
+.env
+.env.*
+!.env.example
+
+# Scripts e arquivos especificos do ambiente Windows de desenvolvimento —
+# nao fazem sentido dentro do container Linux.
+.nssm
+*.ps1
+nul
+
+.idea
+.vscode
+.editorconfig
+*.log
+.phpunit.result.cache
+tests
+
+README.md
