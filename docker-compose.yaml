@@ -31,6 +31,9 @@ services:
       start_period: 30s
     volumes:
       - storage:/var/www/html/storage
+    networks:
+      - coolify
+      - default
 
   worker:
     build:
@@ -44,6 +47,9 @@ services:
       - app
     volumes:
       - storage:/var/www/html/storage
+    networks:
+      - coolify
+      - default
 
 # Volume nomeado compartilhado entre "app" e "worker": e onde ficam os CSVs
 # enviados (storage/app/...) e os logs (storage/logs/laravel.log) — sem isso,
@@ -53,6 +59,5 @@ volumes:
   storage:
 
 networks:
-  default:
-    name: coolify
+  coolify:
     external: true
