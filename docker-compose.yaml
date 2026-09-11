@@ -51,3 +51,8 @@ services:
 # de salvar no upload, e o ImportCsvJob falharia dizendo que o CSV nao existe.
 volumes:
   storage:
+
+networks:
+  default:
+    name: coolify
+    external: true
