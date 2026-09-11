@@ -21,6 +21,16 @@ class ListsController extends Controller
         return Inertia::render('Lists/Index');
     }
 
+    /**
+     * Tela "Fila de processamento": mostra o que esta enfileirado, o que esta
+     * rodando agora e o que falhou — antes disso, a unica forma de saber por
+     * que uma lista nao andava era abrir o banco ou o log na mao.
+     */
+    public function queue(): Response
+    {
+        return Inertia::render('Queue/Index');
+    }
+
     /** Log de erros de uma lista: canais com falha/mortos e o motivo detectado */
     public function errors(Playlist $playlist): Response
     {

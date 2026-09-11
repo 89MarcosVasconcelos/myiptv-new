@@ -74,6 +74,13 @@ function isCurrent(name) {
           >
             Itens / canais
           </Link>
+          <Link
+            :href="route('fila.index')"
+            class="block rounded-lg px-3 py-2 font-medium transition"
+            :class="isCurrent('fila.index') ? 'bg-violet-600/20 text-violet-300' : 'text-zinc-300 hover:bg-zinc-800 hover:text-white'"
+          >
+            Fila de processamento
+          </Link>
 
           <p class="px-3 pt-4 pb-1 text-xs font-semibold uppercase tracking-wider text-zinc-500">Metadados</p>
           <button

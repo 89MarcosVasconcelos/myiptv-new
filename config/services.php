@@ -32,6 +32,22 @@ return [
         'path' => env('FFPROBE_PATH', 'ffprobe'),
     ],
 
+    /*
+    | Usados por App\Services\Enrichment\ChannelEnricher pra preencher tipo,
+    | genero e descricao dos canais (botao "Preencher lacunas" em Itens
+    | carregados). Chaves gratuitas: TMDb em themoviedb.org/settings/api,
+    | OMDb em omdbapi.com/apikey.aspx. Sem nenhuma das duas, o enriquecimento
+    | ainda tenta TVmaze e iptv-org/api (nao precisam de chave), mas cobrem
+    | bem menos casos.
+    */
+    'tmdb' => [
+        'key' => env('TMDB_API_KEY'),
+    ],
+
+    'omdb' => [
+        'key' => env('OMDB_API_KEY'),
+    ],
+
     'resend' => [
         'key' => env('RESEND_API_KEY'),
     ],

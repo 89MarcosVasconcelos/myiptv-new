@@ -35,15 +35,29 @@ class Playlist extends Model
 
     /**
      * Recalcula os contadores materializados a partir dos canais reais.
-     * Chamado ao fim de cada lote de validacao (evita COUNT(*) no render das telas).
+     * Chamado ao fim de cada lote de validacao, e agora tambem sempre que a
+     * tela "Listas carregadas" carrega (GET /api/v1/playlists) — assim a
+     * porcentagem mostrada nunca fica errada, mesmo se algum job rodou mais
+     * de uma vez (retry, worker que travou e reiniciou no meio, etc.) e o
+     * incremento manual dos contadores saiu da realidade.
+     *
+     * Importante: NAO deixamos isso tocar 'updated_at'. A tela usa esse
+     * campo pra decidir se uma importacao esta "travada" (isStuckImport no
+     * Lists/Index.vue); se cada recalculo de contador avancasse o timestamp,
+     * uma lista de fato travada nunca envelheceria o suficiente pra mostrar
+     * o botao de recuperacao.
      */
     public function refreshCounters(): void
     {
+        $this->timestamps = false;
+
         $this->forceFill([
             'total_count' => $this->channels()->count(),
             'ok_count' => $this->channels()->where('status', 'ok')->count(),
             'failed_count' => $this->channels()->whereIn('status', ['failed', 'dead'])->count(),
             'pending_count' => $this->channels()->where('status', 'pending')->count(),
         ])->save();
+
+        $this->timestamps = true;
     }
 }

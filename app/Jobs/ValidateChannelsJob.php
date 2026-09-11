@@ -13,7 +13,6 @@ use Illuminate\Bus\Queueable;
 use Illuminate\Http\Client\Pool;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Symfony\Component\Process\Process;
 use Symfony\Component\Process\Exception\ProcessTimedOutException;
@@ -30,6 +29,13 @@ use Symfony\Component\Process\Exception\ProcessTimedOutException;
  *      concorrencia pra nao estourar CPU/rede da maquina.
  * Continua rodando com um unico "php artisan queue:work --queue=validation" — nao precisa abrir
  * mais terminal nenhum.
+ *
+ * Windows nao tem pcntl — o $timeout de job do Laravel (que mata o worker via
+ * sinal) simplesmente NAO FUNCIONA aqui. Isso significa que qualquer chamada
+ * bloqueante sem timeout proprio pode travar o worker inteiro PARA SEMPRE (o
+ * "Zerar filas" nao resolve isso: ele limpa jobs na fila, mas o processo do
+ * worker continua preso dentro do handle() de um job que nunca retorna). Por
+ * isso o cuidado extra abaixo com o watchdog do ffprobe.
  */
 class ValidateChannelsJob implements ShouldQueue
 {
@@ -83,20 +89,17 @@ class ValidateChannelsJob implements ShouldQueue
             $result['ok'] ? $okCount++ : $failedCount++;
         }
 
-        if ($playlistId && ($okCount || $failedCount)) {
-            $processedNow = $okCount + $failedCount;
-
-            // IMPORTANTE: pending_count e uma coluna BIGINT UNSIGNED. Em modo
-            // estrito (padrao do MySQL 8), "pending_count - N" e calculado
-            // ANTES do GREATEST(), entao se der negativo o MySQL lanca
-            // SQLSTATE[22003] "out of range" em vez de simplesmente truncar —
-            // o GREATEST nunca chega a ser avaliado. "col - LEAST(col, N)"
-            // nunca fica negativo, entao nao ha underflow para o MySQL barrar.
-            Playlist::where('id', $playlistId)->update([
-                'ok_count' => DB::raw("ok_count + {$okCount}"),
-                'failed_count' => DB::raw("failed_count + {$failedCount}"),
-                'pending_count' => DB::raw("pending_count - LEAST(pending_count, {$processedNow})"),
-            ]);
+        // Recalcula os contadores da playlist a partir do status REAL de cada
+        // canal (refreshCounters), em vez de somar/subtrair incrementalmente
+        // aqui. O incremental parecia certo mas desalinhava (percentuais
+        // errados na tela) sempre que um canal era processado mais de uma vez
+        // — o que aconteceu de verdade aqui: jobs presos/duplicados na fila
+        // (o motivo de existir o botao "Zerar filas") faziam o mesmo canal
+        // contar "ok" ou "falhou" duas vezes. Recontar do zero e mais caro
+        // (3 COUNT) mas nunca desalinha, nao importa quantas vezes um job
+        // rode de novo.
+        if ($playlistId) {
+            Playlist::find($playlistId)?->refreshCounters();
         }
 
         $importRun = ImportRun::find($this->importRunId);
@@ -223,6 +226,19 @@ class ValidateChannelsJob implements ShouldQueue
      * Roda ffprobe pra cada entrada em $needsFfprobe com no maximo
      * self::FFPROBE_CONCURRENCY processos simultaneos (janela deslizante).
      *
+     * BUG CORRIGIDO AQUI: o Symfony Process so verifica o setTimeout() dentro
+     * de checkTimeout() — chamar so isRunning() (como este loop fazia antes)
+     * NUNCA dispara o watchdog, porque isRunning() nao chama checkTimeout()
+     * internamente (so wait()/run() chamam). Ou seja: o "FFPROBE_WALL_TIMEOUT"
+     * nunca era aplicado de verdade, e um ffprobe preso num stream ruim
+     * (conexao que trava no meio, comum em fonte IPTV instavel) ficava
+     * "isRunning() == true" pra sempre — travando esse job, e como so tem UM
+     * worker (sem pcntl no Windows pra matar isso de fora), travava a fila
+     * inteira ate alguem reiniciar o servico na mao. Alem de chamar
+     * checkTimeout() explicitamente, tem um watchdog de lote (deadline) como
+     * segunda camada de seguranca, caso algum caso nao previsto escape do
+     * timeout individual do Symfony.
+     *
      * @return array<int, array{ok: bool, timed_out: bool, exit_code: ?int, stderr: string}>
      */
     private function runFfprobePool(array $needsFfprobe): array
@@ -230,6 +246,14 @@ class ValidateChannelsJob implements ShouldQueue
         $queue = array_values($needsFfprobe);
         $running = []; // channel_id => Process
         $done = [];
+
+        // Teto de tempo pro LOTE inteiro: tempo de 1 ffprobe (+ folga) vezes
+        // quantas "ondas" de FFPROBE_CONCURRENCY cabem no lote, mais uma
+        // margem generosa. Isso nunca deveria ser atingido (checkTimeout ja
+        // deveria ter resolvido cada processo individualmente) — e so uma
+        // rede de seguranca pra garantir que o job SEMPRE retorna.
+        $waves = (int) ceil(count($needsFfprobe) / self::FFPROBE_CONCURRENCY);
+        $deadline = microtime(true) + ($waves * (self::FFPROBE_WALL_TIMEOUT + 5)) + 30;
 
         while (! empty($queue) || ! empty($running)) {
             while (count($running) < self::FFPROBE_CONCURRENCY && ! empty($queue)) {
@@ -246,8 +270,11 @@ class ValidateChannelsJob implements ShouldQueue
                 $timedOut = false;
 
                 try {
-                    // isRunning() e quem efetivamente checa o watchdog interno
-                    // do Symfony (setTimeout) e lanca a excecao quando estoura.
+                    // checkTimeout() e quem de fato compara o relogio com o
+                    // setTimeout() do processo e lanca a excecao quando
+                    // estoura — isRunning() sozinho NUNCA faz essa checagem.
+                    $process->checkTimeout();
+
                     if ($process->isRunning()) {
                         continue;
                     }
@@ -267,6 +294,23 @@ class ValidateChannelsJob implements ShouldQueue
                     'stderr' => mb_scrub(trim($process->getErrorOutput())),
                 ];
                 unset($running[$channelId]);
+            }
+
+            // Rede de seguranca: se por qualquer motivo ainda sobrou processo
+            // rodando alem do prazo do lote inteiro, mata tudo na marra e
+            // marca como timeout — nunca deixa o job (e o worker) preso.
+            if (! empty($running) && microtime(true) > $deadline) {
+                foreach ($running as $channelId => $process) {
+                    $process->stop(1);
+                    $done[$channelId] = [
+                        'ok' => false,
+                        'timed_out' => true,
+                        'exit_code' => null,
+                        'stderr' => 'watchdog: tempo maximo do lote de ffprobe excedido.',
+                    ];
+                }
+                $running = [];
+                $queue = [];
             }
         }
 

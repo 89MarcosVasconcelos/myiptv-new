@@ -148,23 +148,79 @@ function descriptionPreview(channel) {
 }
 
 // "Preencher lacunas": dispara o job em lote que busca tipo/gênero/descrição
-// em fontes externas (TMDb/OMDb/TVmaze/iptv-org) para os canais que ainda
-// não têm essas informações.
+// em fontes externas (TMDb/OMDb/TVmaze/iptv-org). Roda numa fila própria
+// ('enrichment', separada de 'validation') pra um catálogo grande nunca mais
+// travar a verificação de listas — foi isso que causou uma trava real de
+// horas antes desse ajuste.
+//
+// Dois modos:
+// - parcial: só os canais com tipo, gênero ou descrição vazios (o normal).
+// - total: todos os canais, mesmo os já preenchidos — útil pra tentar de
+//   novo depois de configurar uma chave de API nova ou corrigir o
+//   certificado SSL. Nunca sobrescreve um campo que já tem valor.
 const fillingGaps = ref(false)
 const fillGapsMessage = ref('')
+const cancellingFillGaps = ref(false)
+const enrichmentProgress = ref(null)
+let enrichmentTimer = null
 
-async function fillGaps() {
-  if (!confirm('Isso enfileira a busca de tipo/gênero/descrição (em fontes externas) para os canais com essas informações vazias. Pode levar um tempo dependendo do limite das APIs. Continuar?')) return
+async function fillGaps(mode) {
+  const confirmText = mode === 'total'
+    ? 'Isso enfileira a busca de tipo/gênero/descrição (em fontes externas) para TODOS os canais, mesmo os já preenchidos (sem sobrescrever o que já existe). Pode demorar bem mais que o modo parcial. Continuar?'
+    : 'Isso enfileira a busca de tipo/gênero/descrição (em fontes externas) para os canais com essas informações vazias. Pode levar um tempo dependendo do limite das APIs. Continuar?'
+  if (!confirm(confirmText)) return
   fillingGaps.value = true
   fillGapsMessage.value = ''
   try {
-    const { data } = await axios.post('/api/v1/channels/fill-gaps')
-    fillGapsMessage.value = `${data.queued} canal(is) enfileirado(s) para enriquecimento.`
+    const { data } = await axios.post('/api/v1/channels/fill-gaps', { mode })
+    fillGapsMessage.value = `${data.queued} canal(is) enfileirado(s) para enriquecimento (${mode === 'total' ? 'total' : 'parcial'}).`
+    await loadEnrichmentProgress()
+    startEnrichmentPolling()
   } catch (e) {
     alert(e.response?.data?.message ?? 'Falha ao iniciar preenchimento de lacunas.')
   } finally {
     fillingGaps.value = false
   }
+}
+
+// Cancela um lote de enriquecimento em andamento — útil se as chaves de API
+// (TMDB_API_KEY/OMDB_API_KEY) ainda não foram configuradas, caso em que os
+// jobs só vão falhar mesmo sem produzir nada, ou se foi engano num catálogo
+// grande.
+async function cancelFillGaps() {
+  if (!confirm('Cancelar o preenchimento de lacunas? Isso remove da fila os jobs de enriquecimento ainda não processados.')) return
+  cancellingFillGaps.value = true
+  try {
+    const { data } = await axios.post('/api/v1/channels/cancel-fill-gaps')
+    fillGapsMessage.value = `${data.jobs_cleared} job(s) de enriquecimento cancelado(s).`
+    await loadEnrichmentProgress()
+  } catch (e) {
+    alert(e.response?.data?.message ?? 'Falha ao cancelar preenchimento de lacunas.')
+  } finally {
+    cancellingFillGaps.value = false
+  }
+}
+
+// Barra de progresso: "processado" é sempre o total do lote menos o que
+// ainda está na fila 'enrichment' agora — nunca um contador que soma evento
+// por evento (mesmo motivo do refreshCounters() das listas: sobrevive a
+// job que roda de novo ou worker que reinicia no meio).
+async function loadEnrichmentProgress() {
+  try {
+    const { data } = await axios.get('/api/v1/channels/enrichment-progress')
+    enrichmentProgress.value = data
+    if (!data.running && enrichmentTimer) {
+      clearInterval(enrichmentTimer)
+      enrichmentTimer = null
+    }
+  } catch (e) {
+    // silencioso: o polling não pode quebrar a tela principal
+  }
+}
+
+function startEnrichmentPolling() {
+  if (enrichmentTimer) return
+  enrichmentTimer = setInterval(loadEnrichmentProgress, 3000)
 }
 
 async function recheck(channel) {
@@ -176,6 +232,20 @@ async function recheck(channel) {
 const selectClass = 'w-full rounded-md border-zinc-700 bg-zinc-800 text-xs text-zinc-100 focus:border-violet-500 focus:ring-violet-500'
 
 load()
+
+// Se a tela for aberta com um lote de enriquecimento já em andamento (ex.:
+// disparado antes, ou a página recarregada no meio), retoma o polling da
+// barra de progresso sozinho, sem precisar clicar em nada de novo.
+onMounted(async () => {
+  await loadEnrichmentProgress()
+  if (enrichmentProgress.value?.running) {
+    startEnrichmentPolling()
+  }
+})
+
+onUnmounted(() => {
+  if (enrichmentTimer) clearInterval(enrichmentTimer)
+})
 </script>
 
 <template>
@@ -200,14 +270,43 @@ load()
             />
             Mostrar só quem tem tipo, gênero ou descrição vazios
           </label>
-          <div class="flex items-center gap-2">
+          <div class="flex flex-wrap items-center gap-2">
             <p v-if="fillGapsMessage" class="text-xs text-emerald-400">{{ fillGapsMessage }}</p>
+            <button
+              class="rounded-md border border-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-400 transition hover:border-red-500 hover:text-red-300 disabled:opacity-50"
+              :disabled="cancellingFillGaps"
+              title="Remove da fila os jobs de enriquecimento ainda não processados."
+              @click="cancelFillGaps"
+            >{{ cancellingFillGaps ? 'Cancelando...' : 'Cancelar enriquecimento' }}</button>
             <button
               class="rounded-md border border-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-300 transition hover:border-violet-500 hover:text-violet-300 disabled:opacity-50"
               :disabled="fillingGaps"
-              title="Busca tipo, gênero e descrição em fontes externas (TMDb, OMDb, TVmaze, iptv-org) para quem ainda não tem."
-              @click="fillGaps"
-            >{{ fillingGaps ? 'Enfileirando...' : 'Preencher lacunas' }}</button>
+              title="Busca tipo, gênero e descrição em fontes externas para os canais que ainda não tem."
+              @click="fillGaps('partial')"
+            >{{ fillingGaps ? 'Enfileirando...' : 'Preencher lacunas (parcial)' }}</button>
+            <button
+              class="rounded-md border border-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-300 transition hover:border-amber-500 hover:text-amber-300 disabled:opacity-50"
+              :disabled="fillingGaps"
+              title="Tenta de novo em TODOS os canais, mesmo os já preenchidos — sem sobrescrever o que já existe. Útil depois de configurar uma chave de API nova."
+              @click="fillGaps('total')"
+            >{{ fillingGaps ? 'Enfileirando...' : 'Preencher lacunas (total)' }}</button>
+          </div>
+        </div>
+
+        <div v-if="enrichmentProgress?.total" class="rounded-lg border border-zinc-800 bg-zinc-900 px-4 py-3">
+          <div class="mb-1 flex items-center justify-between text-xs text-zinc-400">
+            <span>
+              Enriquecimento ({{ enrichmentProgress.mode === 'total' ? 'total' : 'parcial' }}):
+              {{ enrichmentProgress.processed }}/{{ enrichmentProgress.total }} ({{ enrichmentProgress.percent }}%)
+            </span>
+            <span v-if="!enrichmentProgress.running" class="font-medium text-emerald-400">concluído</span>
+          </div>
+          <div class="h-2 w-full overflow-hidden rounded-full bg-zinc-800">
+            <div
+              class="h-full rounded-full transition-all"
+              :class="enrichmentProgress.running ? 'bg-gradient-to-r from-amber-500 to-violet-500' : 'bg-emerald-500'"
+              :style="{ width: enrichmentProgress.percent + '%' }"
+            />
           </div>
         </div>
       </div>

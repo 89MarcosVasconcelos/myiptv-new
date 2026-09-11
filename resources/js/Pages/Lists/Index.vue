@@ -8,12 +8,26 @@ const playlists = ref([])
 const loading = ref(true)
 const resettingQueue = ref(false)
 const resetMessage = ref('')
+const queueHealth = ref(null)
 let pollTimer = null
+let healthTimer = null
 
 async function load() {
   const { data } = await axios.get('/api/v1/playlists')
   playlists.value = data.data
   loading.value = false
+}
+
+// Diagnostico proativo: se o worker travar de novo por qualquer motivo nao
+// previsto, isso aparece aqui sozinho (job reservado ha muito tempo sem
+// terminar) em vez de ficar invisivel ate alguem notar horas depois.
+async function checkQueueHealth() {
+  try {
+    const { data } = await axios.get('/api/v1/queue/health')
+    queueHealth.value = data
+  } catch (e) {
+    // silencioso: isso e so um aviso extra, nao pode quebrar a tela principal
+  }
 }
 
 function progressPercent(p) {
@@ -33,8 +47,15 @@ function needsValidation(p) {
   return p.status !== 'processing' && p.total_count > 0 && (p.pending_count > 0 || p.failed_count > 0)
 }
 
+// "Continuar verificação" é só pra quando a verificação foi de fato
+// PAUSADA no meio (ainda sobra pending_count > 0 depois de já ter ok/falha).
+// Quando o lote inteiro já rodou (pending_count chegou a 0, mesmo com
+// falhas), o botão vira "Recarregar lista" — a ação é a mesma (reprocessa
+// os que falharam), só o nome muda pra não sugerir que tem algo "no meio".
 function validationLabel(p) {
-  return p.ok_count === 0 && p.failed_count === 0 ? 'Iniciar verificação' : 'Continuar verificação'
+  if (p.ok_count === 0 && p.failed_count === 0) return 'Iniciar verificação'
+  if (p.pending_count === 0) return 'Recarregar lista'
+  return 'Continuar verificação'
 }
 
 // A IMPORTACAO em si (nao a verificacao) travou ou falhou: a lista nunca
@@ -103,6 +124,11 @@ async function deletePlaylist(playlist) {
 
 // Botão de emergência: limpa jobs presos/duplicados da fila e destrava
 // qualquer lista parada em "processing" — sem precisar abrir terminal.
+// IMPORTANTE: isso so limpa as LINHAS da fila no banco. Se o PROCESSO do
+// worker (o "php artisan queue:work" rodando como serviço do Windows) ficou
+// travado de verdade (preso num job que nunca termina), zerar a fila não
+// acorda esse processo — por isso o aviso abaixo, quando detectamos isso,
+// sempre vai indicar o "Restart-Service IptvQueueWorker" como o passo real.
 async function resetQueue() {
   if (!confirm('Isso limpa a fila de processamento (jobs presos ou duplicados) e destrava listas paradas em "processando". Continuar?')) return
   resettingQueue.value = true
@@ -110,7 +136,11 @@ async function resetQueue() {
   try {
     const { data } = await axios.post('/api/v1/playlists/reset-queue')
     resetMessage.value = `Fila zerada: ${data.jobs_cleared} job(s) removido(s), ${data.failed_jobs_cleared} falha(s) antiga(s) limpa(s), ${data.playlists_unstuck} lista(s) destravada(s).`
+    if (data.worker_was_stuck) {
+      resetMessage.value += ' O worker parecia travado — se as listas não voltarem a andar em alguns segundos, rode "Restart-Service IptvQueueWorker" no PowerShell (como administrador).'
+    }
     await load()
+    await checkQueueHealth()
   } catch (e) {
     alert(e.response?.data?.message ?? 'Falha ao zerar a fila.')
   } finally {
@@ -127,19 +157,48 @@ function statusBadge(status) {
   }[status] ?? 'bg-zinc-700 text-zinc-300'
 }
 
+function formatDuration(seconds) {
+  if (!seconds) return '0s'
+  const m = Math.floor(seconds / 60)
+  const s = seconds % 60
+  return m > 0 ? `${m}min ${s}s` : `${s}s`
+}
+
 onMounted(() => {
   load()
+  checkQueueHealth()
   pollTimer = setInterval(() => {
     if (playlists.value.some((p) => isValidating(p) || isImporting(p))) load()
   }, 2500)
+  // O check de saude da fila roda sempre, mesmo sem nenhuma lista visivelmente
+  // "processando" na tela — e justamente quando o worker trava que os status
+  // param de avançar, entao não dá pra depender só do polling condicional acima.
+  healthTimer = setInterval(checkQueueHealth, 10_000)
 })
 
-onUnmounted(() => clearInterval(pollTimer))
+onUnmounted(() => {
+  clearInterval(pollTimer)
+  clearInterval(healthTimer)
+})
 </script>
 
 <template>
   <AuthenticatedLayout title="Listas carregadas">
     <div class="mx-auto max-w-5xl">
+      <div
+        v-if="queueHealth?.stuck"
+        class="mb-4 rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-300"
+      >
+        <p class="font-medium">
+          O worker de processamento parece travado há {{ formatDuration(queueHealth.stuck_for_seconds) }}
+          ({{ queueHealth.queued_jobs }} job(s) na fila aguardando).
+        </p>
+        <p class="mt-1 text-xs text-red-300/80">
+          "Zerar filas" limpa a fila no banco, mas não acorda um processo travado. No servidor, abra o PowerShell
+          como administrador e rode: <code class="rounded bg-black/30 px-1 py-0.5">Restart-Service IptvQueueWorker</code>
+        </p>
+      </div>
+
       <div class="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <p v-if="resetMessage" class="text-xs text-emerald-400">{{ resetMessage }}</p>
         <p v-else class="text-xs text-zinc-500">Lista travada ou fila emperrada? Zere a fila abaixo — não precisa de terminal.</p>

@@ -36,6 +36,8 @@ Route::middleware('auth')->group(function () {
 
     Route::get('/canais', [ChannelsController::class, 'index'])->name('canais.index');
 
+    Route::get('/fila', [ListsController::class, 'queue'])->name('fila.index');
+
     Route::get('/metadados/{type}', [WebMetadataController::class, 'index'])->name('metadados.index');
 
     Route::get('/player', [PlayerController::class, 'show'])->name('player.show');
@@ -46,6 +48,8 @@ Route::middleware('auth')->group(function () {
     Route::prefix('api/v1')->group(function () {
         Route::get('/playlists', [PlaylistController::class, 'index']);
         Route::post('/playlists/reset-queue', [PlaylistController::class, 'resetQueue']);
+        Route::get('/queue/health', [PlaylistController::class, 'queueHealth']);
+        Route::get('/queue/jobs', [PlaylistController::class, 'queueJobs']);
         Route::get('/playlists/{playlist}', [PlaylistController::class, 'show']);
         Route::post('/playlists', [PlaylistController::class, 'store']);
         Route::post('/playlists/{playlist}/validate', [PlaylistController::class, 'validate']);
@@ -56,6 +60,9 @@ Route::middleware('auth')->group(function () {
 
         Route::get('/channels', [ChannelController::class, 'index']);
         Route::get('/channels/admin', [ChannelController::class, 'adminIndex']);
+        Route::post('/channels/fill-gaps', [ChannelController::class, 'fillGaps']);
+        Route::post('/channels/cancel-fill-gaps', [ChannelController::class, 'cancelFillGaps']);
+        Route::get('/channels/enrichment-progress', [ChannelController::class, 'enrichmentProgress']);
         Route::patch('/channels/{channel}', [ChannelController::class, 'update']);
         Route::post('/channels/{channel}/recheck', [ChannelController::class, 'recheck']);
 

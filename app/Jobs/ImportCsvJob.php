@@ -44,7 +44,17 @@ class ImportCsvJob implements ShouldQueue
 
     public function handle(): void
     {
-        $playlist = Playlist::findOrFail($this->playlistId);
+        // A lista pode ter sido removida pelo usuario enquanto este job
+        // esperava a vez na fila (acontece direto quando se apaga uma lista
+        // duplicada logo depois de subir). Isso e normal, nao e erro: sai
+        // limpo em vez de estourar ModelNotFoundException e sujar a tela de
+        // falhas com algo que nao pede acao nenhuma.
+        $playlist = Playlist::find($this->playlistId);
+
+        if (! $playlist) {
+            return;
+        }
+
         $playlist->update(['status' => 'processing', 'format' => 'media']);
 
         $lookup = $this->buildLookupMaps();

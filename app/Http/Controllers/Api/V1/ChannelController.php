@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
+use App\Jobs\QueueChannelEnrichmentJob;
 use App\Jobs\ValidateChannelsJob;
 use App\Models\Channel;
 use Illuminate\Http\Request;
@@ -151,5 +152,123 @@ class ChannelController extends Controller
         ValidateChannelsJob::dispatch([$channel->id], $channel->playlist->importRuns()->latest()->value('id') ?? 0)->onQueue('validation');
 
         return response()->json(['status' => 'queued']);
+    }
+
+    /**
+     * POST /api/v1/channels/fill-gaps
+     * Botao "Preencher lacunas". Com catalogo grande (aqui, ~11 mil canais
+     * sem tipo/genero/descricao de uma vez), enfileirar um EnrichChannelJob
+     * por canal DENTRO da propria requisicao travava a tela por minutos —
+     * era o "apertei e nao aconteceu nada": o PHP ficava inserindo milhares
+     * de linhas antes de conseguir responder. Agora so dispara o
+     * QueueChannelEnrichmentJob (instantaneo) que faz esse trabalho pesado
+     * em background, e devolve na hora uma contagem aproximada pro usuario
+     * ver que tem coisa pra fazer.
+     *
+     * Fila 'enrichment', separada de 'validation': um catalogo gigante de
+     * enriquecimento nao pode nunca mais monopolizar o worker e travar a
+     * validacao de listas (foi exatamente isso que aconteceu antes desse
+     * ajuste).
+     *
+     * Dois modos (?mode=partial|total):
+     * - partial (padrao): so os canais que ainda tem tipo, genero ou
+     *   descricao vazios — o "preencher o que falta" de sempre.
+     * - total: TODOS os canais, mesmo os que ja tem tudo preenchido. Util
+     *   depois de configurar uma chave de API nova ou corrigir o certificado
+     *   SSL, pra tentar de novo os canais que so falharam por causa disso.
+     *   O ChannelEnricher continua nunca sobrescrevendo um campo que ja tem
+     *   valor, entao rodar "total" num canal ja completo simplesmente nao
+     *   faz nada nele — sem risco de perder dado bom.
+     *
+     * O total do lote fica guardado em cache pra tela conseguir montar a
+     * barra de progresso (ver enrichmentProgress()) comparando com quanto
+     * ainda resta na fila 'enrichment' — sem precisar de tabela nova nem de
+     * contador incremental (que ja vimos, na fila de validacao, que desalinha
+     * com retry/worker reiniciado no meio).
+     */
+    public function fillGaps(Request $request)
+    {
+        $mode = $request->input('mode') === 'total' ? 'total' : 'partial';
+        $force = $mode === 'total';
+
+        $query = Channel::query();
+
+        if (! $force) {
+            $query->where(function ($q) {
+                $q->whereNull('content_type_id')
+                    ->orWhereNull('description')
+                    ->orWhereDoesntHave('genres');
+            });
+        }
+
+        $count = $query->count();
+
+        \Illuminate\Support\Facades\Cache::put('enrichment_batch', [
+            'total' => $count,
+            'mode' => $mode,
+            'started_at' => now()->toIso8601String(),
+        ], now()->addDays(2));
+
+        QueueChannelEnrichmentJob::dispatch($force)->onQueue('enrichment');
+
+        return response()->json(['queued' => $count, 'mode' => $mode]);
+    }
+
+    /**
+     * GET /api/v1/channels/enrichment-progress
+     * Progresso do lote de enriquecimento mais recente, pra tela mostrar uma
+     * barra de carregamento. "Processado" e sempre TOTAL menos o que ainda
+     * esta na fila 'enrichment' — nunca um contador incremental (mesmo
+     * motivo do refreshCounters() das listas: sobrevive a job que roda de
+     * novo, worker que reinicia no meio, etc., porque sempre reflete o
+     * estado real da fila em vez de somar eventos).
+     */
+    public function enrichmentProgress()
+    {
+        $batch = \Illuminate\Support\Facades\Cache::get('enrichment_batch');
+
+        if (! $batch) {
+            return response()->json(['running' => false, 'total' => 0]);
+        }
+
+        $remaining = \Illuminate\Support\Facades\DB::table('jobs')->where('queue', 'enrichment')->count();
+        $total = (int) $batch['total'];
+        $processed = max(0, $total - $remaining);
+        $percent = $total > 0 ? (int) round($processed / $total * 100) : 100;
+
+        return response()->json([
+            'running' => $remaining > 0,
+            'mode' => $batch['mode'] ?? 'partial',
+            'total' => $total,
+            'processed' => $processed,
+            'remaining' => $remaining,
+            'percent' => $percent,
+            'started_at' => $batch['started_at'] ?? null,
+        ]);
+    }
+
+    /**
+     * POST /api/v1/channels/cancel-fill-gaps
+     * Limpa qualquer job de enriquecimento (EnrichChannelJob ou o proprio
+     * QueueChannelEnrichmentJob) ainda pendente na fila — tanto os que ja
+     * foram enfileirados na fila nova 'enrichment' quanto os que sobraram
+     * na fila 'validation' de antes dessa separacao existir. Util pra
+     * cancelar um "Preencher lacunas" dado sem querer, ou parar um lote
+     * grande enquanto as chaves de API/certificado SSL ainda nao foram
+     * configurados (sem isso, os jobs so vao falhar mesmo).
+     */
+    public function cancelFillGaps()
+    {
+        $cleared = \Illuminate\Support\Facades\DB::table('jobs')
+            ->where(function ($q) {
+                $q->where('queue', 'enrichment')
+                    ->orWhere('payload', 'like', '%EnrichChannelJob%')
+                    ->orWhere('payload', 'like', '%QueueChannelEnrichmentJob%');
+            })
+            ->delete();
+
+        \Illuminate\Support\Facades\Cache::forget('enrichment_batch');
+
+        return response()->json(['jobs_cleared' => $cleared]);
     }
 }
