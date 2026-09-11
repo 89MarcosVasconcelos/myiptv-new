@@ -12,6 +12,16 @@
 # ---------------------------------------------------------------------------
 # Estagio 1: build do frontend (Vite)
 # ---------------------------------------------------------------------------
+FROM composer:2 AS vendor
+
+WORKDIR /app
+
+COPY composer.json composer.lock ./
+RUN composer install --no-dev --optimize-autoloader --no-interaction --no-scripts --no-progress --ignore-platform-reqs
+
+# ---------------------------------------------------------------------
+# Estagio 1: build do frontend (Vite)
+# ---------------------------------------------------------------------
 FROM node:20-alpine AS frontend
 
 WORKDIR /app
@@ -22,6 +32,7 @@ RUN npm ci
 COPY resources ./resources
 COPY vite.config.js tailwind.config.js postcss.config.js jsconfig.json ./
 COPY public ./public
+COPY --from=vendor /app/vendor ./vendor
 RUN npm run build
 
 # ---------------------------------------------------------------------------
