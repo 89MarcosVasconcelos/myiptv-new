@@ -145,7 +145,7 @@ function Presets({ presets, onSync, disabled }) {
         </div>
         <div class="flex flex-wrap gap-2">
           {g.items.map((i) => (
-            <button type="button" class="btn btn-ghost" disabled={disabled}
+            <button type="button" class="btn" disabled={disabled}
               onClick={() => onSync(`iptv-org · ${i.name}`, i.url)}>
               {i.name} ⬇
             </button>
@@ -155,7 +155,7 @@ function Presets({ presets, onSync, disabled }) {
       <div>
         <div class="text-sm font-semibold">{presets.free_tv.title}</div>
         <p class="text-xs text-muted mb-2">{presets.free_tv.note}</p>
-        <button type="button" class="btn btn-ghost" disabled={disabled}
+        <button type="button" class="btn" disabled={disabled}
           onClick={() => onSync("Free-TV", presets.free_tv.url)}>
           Importar Free-TV ⬇
         </button>
@@ -218,7 +218,7 @@ function MySources({ data, onChange, onSync, running, setErr }) {
               ) : (
                 <button class="btn" disabled={running} onClick={() => onSync(s)}>Sincronizar</button>
               )}
-              <button class="btn btn-ghost" onClick={act(() => adminApi.deleteSource(s.id))}>Remover</button>
+              <button class="btn" onClick={act(() => adminApi.deleteSource(s.id))}>Remover</button>
             </div>
           </li>
         ))}
@@ -284,7 +284,7 @@ function GitHubDiscover({ data, onAdded, sources }) {
             {res.candidates.map((c) => (
               <li class="text-xs flex items-center gap-2">
                 <span class="truncate flex-1" title={c.url}>{c.name}</span>
-                <button class="btn btn-ghost" disabled={known.has(c.url)} onClick={() => queue(c)}>
+                <button class="btn" disabled={known.has(c.url)} onClick={() => queue(c)}>
                   {known.has(c.url) ? "Na fila" : "Adicionar à fila"}
                 </button>
               </li>
@@ -354,7 +354,7 @@ function TmdbTools({ configured }) {
           {titles.map((t) => (
             <li class="text-xs flex items-center gap-2">
               <span class="flex-1 truncate">{t.title} {t.year ? `(${t.year})` : ""} · {t.type === "series" ? "série" : "filme"}</span>
-              <button class="btn btn-ghost" disabled={!configured} onClick={() => pick(t)}>Escolher no TMDB</button>
+              <button class="btn" disabled={!configured} onClick={() => pick(t)}>Escolher no TMDB</button>
             </li>
           ))}
         </ul>

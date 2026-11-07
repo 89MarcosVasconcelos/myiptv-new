@@ -40,6 +40,9 @@
   .btn:hover {
     @apply shadow-glow-lg;
   }
+  .btn:disabled {
+    @apply opacity-60 cursor-not-allowed;
+  }
   .btn-ghost {
     @apply bg-card-hover border border-border text-muted shadow-none;
   }
