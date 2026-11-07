@@ -1,15 +1,15 @@
-/vendor
-/node_modules
-/public/build
-/public/hot
-/storage/*.key
 .env
-.env.backup
-.phpunit.result.cache
-Homestead.json
-Homestead.yaml
-npm-debug.log
-yarn-error.log
-/.idea
-/.vscode
-/tmp-laravel
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.log
+node_modules/
+frontend-react/dist/
+
+# CSVs reais de importação ficam fora do git — só o exemplo é versionado
+data/*.csv
+!data/titulos.exemplo.csv
+
+# dataset público do IMDb (classificador de gênero), baixado manualmente
+data/imdb/

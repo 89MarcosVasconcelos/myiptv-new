@@ -1,0 +1,382 @@
+import { useState, useEffect, useRef } from "preact/hooks";
+import { useFetch } from "../lib/useFetch.js";
+import { api } from "../lib/api.js";
+import { navigate } from "../lib/router.jsx";
+import { needsPlayHost, goPlayHost } from "../lib/playHost.js";
+import { VideoBox } from "../components/VideoBox.jsx";
+import { Row } from "../components/Row.jsx";
+import { Card } from "../components/Card.jsx";
+
+// /assistir/:tipo/:id   tipo = canal | filme | serie
+export function Watch({ params }) {
+  const { tipo, id } = params;
+  return tipo === "canal" ? <WatchChannel tvgId={id} /> : <WatchVod id={id} isSeries={tipo === "serie"} />;
+}
+
+function BackBar({ children }) {
+  return (
+    <div class="px-4 md:px-8 pt-3 pb-2">
+      <button onClick={() => history.back()} class="text-xs text-muted hover:text-accent">
+        ← voltar
+      </button>
+      <h1 class="mt-1 font-display text-xl md:text-2xl font-bold text-text truncate leading-tight">
+        {children}
+      </h1>
+    </div>
+  );
+}
+
+// ---------- CANAL AO VIVO ----------
+function fmtHour(iso) {
+  return new Date(iso).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+}
+
+// "T1E2" ou "T1E2 — Nome do episódio" quando o episódio tem título
+function episodeLabel(item) {
+  const num = `T${item.season_number ?? "?"}E${item.episode_number ?? "?"}`;
+  return item.episode_title ? `${num} — ${item.episode_title}` : num;
+}
+
+// Teto de segurança, NÃO um limite prático -- pedido explícito do produto:
+// "tem que tentar todas [as opções] e apenas se nenhuma estiver funcionando
+// ele tem que parar e avisar". Quem decide "acabaram os mirrors" é o
+// BACKEND: /resolve devolve 503 quando não sobra nenhum mirror não
+// suprimido pra aquele item, e é isso que encerra o loop (via .catch), não
+// essa contagem. Esse número só existe pra nunca girar pra sempre num bug.
+const MAX_MIRROR_RETRIES = 50;
+
+function WatchChannel({ tvgId }) {
+  // busca o canal ESPECÍFICO (antes procurava dentro da lista de
+  // /channels.json, que virou paginada -- qualquer canal fora da 1ª página
+  // caía em "Canal não encontrado", ou seja, quase todos)
+  const { data: channel, loading, error } = useFetch(`channel-${tvgId}`, () => api.channelDetail(tvgId));
+  const epg = useFetch(channel ? `epg-${tvgId}` : null, () => api.epg(tvgId), { enabled: !!channel });
+  const sameCatList = useFetch(
+    channel?.category ? `channels-cat-${channel.category}` : null,
+    () => api.channels({ category: channel.category, limit: 21 }),
+    { enabled: !!channel?.category }
+  );
+
+  const [lang, setLang] = useState(null);
+  const [url, setUrl] = useState(null);
+  const [status, setStatus] = useState("Verificando…");
+  const urlRef = useRef(null); // último url tocado, pro report-failure saber qual mirror falhou
+  // sempre aponta pro onFatal da execução atual do efeito (closure com o
+  // `attempts` certo) — o VideoBox guarda uma única função estável.
+  const onFatalRef = useRef(() => {});
+
+  const langs = channel?.languages || [];
+
+  useEffect(() => {
+    if (!channel) return;
+    const chosen = lang || (langs.find((g) => g.label === "Português") || langs[0])?.label || null;
+    if (lang !== chosen) setLang(chosen);
+    let alive = true;
+    let attempts = 0;
+
+    function tryResolve() {
+      setStatus(`Verificando "${channel.name}"${chosen && langs.length > 1 ? " (" + chosen + ")" : ""}…`);
+      setUrl(null);
+      urlRef.current = null;
+      api
+        .resolve(channel.tvg_id, langs.length > 1 ? chosen : null)
+        .then((r) => {
+          if (!alive) return;
+          urlRef.current = r.url;
+          setUrl(r.url);
+          setStatus(`Reproduzindo: ${channel.name}`);
+        })
+        .catch((e) => alive && setStatus(e.message || `"${channel.name}" indisponível agora.`));
+    }
+
+    function onFatal() {
+      if (!alive) return;
+      if (urlRef.current) api.reportFailure(channel.tvg_id, urlRef.current);
+      attempts += 1;
+      if (attempts >= MAX_MIRROR_RETRIES) {
+        setUrl(null);
+        setStatus("Falha ao reproduzir — nenhum mirror funcionou.");
+        return;
+      }
+      setStatus(`Falhou, tentando outro servidor (${attempts})…`);
+      tryResolve();
+    }
+
+    onFatalRef.current = onFatal;
+    tryResolve();
+    return () => {
+      alive = false;
+    };
+  }, [channel?.tvg_id, lang]);
+
+  if (loading) return <div class="p-8 text-muted text-sm">Carregando…</div>;
+  if (error || !channel) return <div class="p-8 text-danger text-sm">Canal não encontrado ou fora do ar.</div>;
+
+  const sameCat = (sameCatList.data?.channels || [])
+    .filter((c) => c.tvg_id !== channel.tvg_id)
+    .slice(0, 20);
+
+  return (
+    <div class="pb-16">
+      <BackBar>{channel.name}</BackBar>
+      <div class="bg-black">
+        {url ? (
+          <VideoBox url={url} class="w-full max-w-[1100px] mx-auto aspect-video bg-black" onFatal={() => onFatalRef.current()} />
+        ) : (
+          <div class="w-full max-w-[1100px] mx-auto aspect-video grid place-items-center text-muted text-sm relative overflow-hidden">
+            {channel.backdrop_url && (
+              <img src={channel.backdrop_url} alt="" class="absolute inset-0 h-full w-full object-cover opacity-30" />
+            )}
+            <span class="relative">{status}</span>
+          </div>
+        )}
+      </div>
+
+      <div class="px-4 md:px-8 py-3">
+        <h1 class="text-lg text-accent">{channel.name}</h1>
+        <div class="text-xs text-muted mt-1">
+          {channel.category_label || "Sem categoria"}
+          {channel.now_playing ? " · ▶ " + channel.now_playing.title : ""}
+        </div>
+        <div class="text-xs text-muted mt-1">{status}</div>
+        {channel.description && (
+          <p class="text-sm text-muted mt-3 leading-relaxed max-w-2xl">{channel.description}</p>
+        )}
+
+        {langs.length > 1 && (
+          <div class="flex items-center gap-1.5 flex-wrap mt-3">
+            <span class="text-[11px] uppercase tracking-wide text-muted mr-1">Idioma:</span>
+            {langs.map((g) => (
+              <button class={"chip " + (g.label === lang ? "active" : "")} onClick={() => setLang(g.label)}>
+                {g.label}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {epg.data?.has_epg && (
+        <Row
+          title="Programação"
+          load={async () => epg.data.programs.slice(0, 24)}
+          renderItem={(p) => {
+            const now = Date.now();
+            const live = new Date(p.starts_at) <= now && new Date(p.ends_at) > now;
+            return (
+              <div
+                class={
+                  "shrink-0 snap-start w-[170px] rounded-md border bg-card p-2.5 " +
+                  (live ? "border-accent" : "border-border")
+                }
+              >
+                <div class={"text-[11px] " + (live ? "text-accent" : "text-muted")}>
+                  {live ? "AGORA · " : ""}
+                  {fmtHour(p.starts_at)}
+                </div>
+                <div class="text-[13px] mt-1 line-clamp-2 min-h-[2.4em]">{p.title}</div>
+              </div>
+            );
+          }}
+        />
+      )}
+
+      {sameCat.length > 0 && (
+        <Row
+          title={"Mais de " + (channel.category_label || "TV")}
+          load={async () => sameCat}
+          renderItem={(c) => (
+            <Card
+              kind="channel"
+              title={c.name}
+              image={c.logo_url}
+              subtitle={c.now_playing?.title}
+              onClick={() => navigate(`/assistir/canal/${encodeURIComponent(c.tvg_id)}`)}
+            />
+          )}
+        />
+      )}
+    </div>
+  );
+}
+
+// ---------- FILME / SÉRIE ----------
+function WatchVod({ id }) {
+  const { data, loading, error } = useFetch(`vod-${id}`, () => api.vodDetail(id));
+  const [current, setCurrent] = useState(null); // {label, itemId} — seleção, sem url ainda
+  const [playUrl, setPlayUrl] = useState(null); // url já verificada, pronta pra tocar
+  const [vodStatus, setVodStatus] = useState("");
+  const playUrlRef = useRef(null); // último url tocado, pro report-failure saber qual mirror falhou
+  const onFatalRef = useRef(() => {});
+
+  // resolve (testa mirrors de verdade) sempre que o item selecionado muda —
+  // mesmo fluxo/fallback que a TV ao vivo já usa.
+  useEffect(() => {
+    if (!current) {
+      setPlayUrl(null);
+      return;
+    }
+    let alive = true;
+    let attempts = 0;
+
+    function tryResolve() {
+      setVodStatus("Verificando…");
+      setPlayUrl(null);
+      playUrlRef.current = null;
+      api
+        .vodResolve(current.itemId)
+        .then((r) => {
+          if (!alive) return;
+          if (needsPlayHost(r.url)) {
+            setVodStatus("Abrindo o player…");
+            goPlayHost().catch(() => {
+              if (!alive) return;
+              playUrlRef.current = r.url;
+              setPlayUrl(r.url);
+              setVodStatus("");
+            });
+            return;
+          }
+          playUrlRef.current = r.url;
+          setPlayUrl(r.url);
+          setVodStatus("");
+        })
+        .catch((e) => alive && setVodStatus(e.message || "Indisponível agora."));
+    }
+
+    function onFatal() {
+      if (!alive) return;
+      if (playUrlRef.current) api.vodReportFailure(current.itemId, playUrlRef.current);
+      attempts += 1;
+      if (attempts >= MAX_MIRROR_RETRIES) {
+        setPlayUrl(null);
+        setVodStatus("Falha ao reproduzir — nenhum mirror funcionou.");
+        return;
+      }
+      tryResolve();
+    }
+
+    onFatalRef.current = onFatal;
+    tryResolve();
+    return () => {
+      alive = false;
+    };
+  }, [current?.itemId]);
+
+  // primeiro play: filme -> item[0]; série -> episódio salvo, senão 1º disponível
+  useEffect(() => {
+    if (!data) return;
+    const prog = data.progress;
+    if (data.type === "movie") {
+      const m = data.items[0];
+      if (m?.available) setCurrent({ label: data.title, itemId: m.id });
+      else setCurrent(null);
+      return;
+    }
+    let ep = prog?.item_id && data.items.find((i) => i.id === prog.item_id && i.available);
+    if (!ep) ep = data.items.find((i) => i.available);
+    if (ep) {
+      setCurrent({ label: `${data.title} — ${episodeLabel(ep)}`, itemId: ep.id });
+    } else {
+      setCurrent(null);
+    }
+  }, [data?.id]);
+
+  // retoma da posição salva só quando o item atual é o do progresso
+  const startAt =
+    data?.progress && current && data.progress.item_id === current.itemId ? data.progress.position : 0;
+
+  const reportProgress = (position, duration) => {
+    if (!current) return;
+    api.saveProgress({ title_id: id, item_id: current.itemId ?? null, position, duration });
+  };
+
+  if (loading) return <div class="p-8 text-muted text-sm">Carregando…</div>;
+  if (error) return <div class="p-8 text-danger text-sm">Não foi possível carregar.</div>;
+
+  const t = data;
+
+  return (
+    <div class="pb-16">
+      <BackBar>{t.title}</BackBar>
+
+      <div class="bg-black">
+        {playUrl ? (
+          <VideoBox
+            url={playUrl}
+            startAt={startAt}
+            onTime={reportProgress}
+            onFatal={() => onFatalRef.current()}
+            class="w-full max-w-[1100px] mx-auto aspect-video bg-black"
+          />
+        ) : (
+          <div class="w-full max-w-[1100px] mx-auto aspect-video grid place-items-center relative">
+            {current && vodStatus && (
+              <span class="absolute bottom-3 text-muted text-sm">{vodStatus}</span>
+            )}
+            {t.poster_url ? (
+              <img src={t.poster_url} class="h-full object-contain opacity-60" />
+            ) : (
+              <span class="text-5xl opacity-40">{t.type === "movie" ? "🎬" : "📺"}</span>
+            )}
+          </div>
+        )}
+      </div>
+
+      <div class="px-4 md:px-8 py-3">
+        <h1 class="text-lg text-accent">{t.title}</h1>
+        <div class="text-xs text-muted mt-1">
+          {t.type === "movie" ? "Filme" : "Série"}
+          {t.genre ? " · " + t.genre : ""}
+          {t.year ? " · " + t.year : ""}
+        </div>
+        {t.description && <p class="text-sm text-muted mt-3 leading-relaxed max-w-2xl">{t.description}</p>}
+        {current && <div class="text-xs text-accent mt-2">▶ {current.label}</div>}
+      </div>
+
+      {t.type === "series" && (
+        <Row
+          title="Episódios"
+          load={async () => t.items}
+          renderItem={(i) => {
+            const label = `T${i.season_number ?? "?"}E${i.episode_number ?? "?"}`;
+            const active = current?.itemId === i.id;
+            return (
+              <button
+                disabled={!i.available}
+                onClick={() => setCurrent({ label: `${t.title} — ${episodeLabel(i)}`, itemId: i.id })}
+                class={
+                  "shrink-0 snap-start w-[190px] rounded-md border bg-card p-3 text-left transition-transform disabled:opacity-40 " +
+                  (active ? "border-accent" : "border-border hover:border-accent hover:-translate-y-0.5")
+                }
+              >
+                <div class="text-accent font-display text-sm">{label}</div>
+                <div class="text-[13px] mt-1 line-clamp-2 min-h-[2.4em]">{i.episode_title || "—"}</div>
+                <div class="text-[11px] text-muted mt-1">
+                  {i.available ? (active ? "▶ tocando" : "▶ assistir") : "sem link"}
+                </div>
+              </button>
+            );
+          }}
+        />
+      )}
+
+      {t.genre && t.genre !== "Outros" && (
+        <div class="mt-6">
+          <Row
+            title={"Mais de " + t.genre}
+            load={async () => (await api.vod({ genre: t.genre, limit: 20 })).titles.filter((x) => x.id !== t.id)}
+            renderItem={(x) => (
+              <Card
+                kind={x.type}
+                title={x.title}
+                image={x.poster_url}
+                badge={x.type === "series" ? "série" : "filme"}
+                onClick={() => navigate(`/assistir/${x.type === "series" ? "serie" : "filme"}/${x.id}`)}
+              />
+            )}
+          />
+        </div>
+      )}
+    </div>
+  );
+}

@@ -1,73 +1,60 @@
-# IPTV MP
+# MPIPTV
 
-Plataforma web para cadastrar, validar e exibir listas IPTV (M3U/M3U8) e mídia
-direta (mp4/mkv/etc — inclusive séries), com telas de metadado (país, modo,
-tipo, gênero, idioma, legenda) e um player com busca e filtros encadeados.
+Plataforma IPTV self-hosted (live + VOD): agrega canais, valida os links
+continuamente, serve a playlist M3U e um site com player (hls.js / mpegts.js).
 
-Este commit inicial contém todo o **código específico do projeto** (migrations,
-models, jobs, controllers, rotas, páginas Vue). Ele foi escrito diretamente
-aqui porque este ambiente não tem saída de rede para o Packagist/npm — os
-comandos abaixo, que baixam o framework e as dependências, precisam ser
-rodados na sua máquina.
+O projeto é baseado no **DevolpsTV**, de Bruno Baumgartner
+(<https://github.com/brunobaumgartner/DevolpsTV>), com layout próprio e melhorias
+vindas do MPIPTV anterior (Laravel/Vue).
 
-## Setup (rodar localmente, nesta pasta)
+## Stack
+
+- **api/** — FastAPI + SQLAlchemy + MySQL; serve a API e o front compilado
+- **worker/** — APScheduler: valida links (OK / MORTO / INCONCLUSIVO), limpezas e jobs periódicos
+- **frontend-react/** — Preact + Tailwind + Vite (hash router)
+- **mysql/migrations/** — SQL aplicado automaticamente na subida da API (`schema_migrations`)
+
+## O que veio do projeto anterior
+
+- Proteção **SSRF** nos proxies HLS/mídia e na importação (bloqueia rede interna, revalida cada redirect)
+- Importação de **lista M3U/M3U8** por URL ou texto (Admin → Cadastrar listas), preservando
+  `#EXTVLCOPT` (referrer / user-agent) e descartando só os links mortos
+- Cookie de sessão `Secure` configurável (`COOKIE_SECURE`)
+- Migrations automáticas e banco MySQL próprio no compose
+
+## Deploy (Coolify)
+
+1. Recurso **Docker Compose** apontando para este repositório (branch `producao`), arquivo `docker-compose.yaml`.
+2. Domínio no serviço **`app`** (porta `7678`), ex.: `https://mptv.seudominio.com:7678`.
+3. As senhas `SERVICE_PASSWORD_*` são geradas pelo Coolify. A senha do admin é `SERVICE_PASSWORD_ADMIN`
+   (usuário `ADMIN_USERNAME`, padrão `admin`).
+4. Opcional: `TMDB_API_KEY`. Mantenha `COOKIE_SECURE=true` (site em HTTPS).
+5. CI: `.github/workflows/deploy.yml` verifica o código e chama o webhook do Coolify se os secrets
+   `COOLIFY_WEBHOOK_URL` e `COOLIFY_TOKEN` existirem.
+
+> O compose cria um MySQL **novo** (volume `mysql_data`). Bancos de versões antigas não são reaproveitados.
+
+## Rodando local
 
 ```bash
-# 1. Scaffold do Laravel 12 (cria vendor/, config/, resources/views, etc. —
-#    não sobrescreve os arquivos que já estão aqui: app/, database/migrations,
-#    database/seeders, routes/web.php e routes/api.php)
-composer create-project laravel/laravel:^12.0 tmp-laravel
-rsync -a --ignore-existing tmp-laravel/ ./
-rm -rf tmp-laravel
-
-# 2. Dependências do projeto
-composer require inertiajs/inertia-laravel laravel/sanctum
-composer require laravel/breeze --dev
-php artisan breeze:install vue
-npm install
-npm install hls.js
-
-# 3. Banco (MySQL) — ajuste o .env antes:
-#    DB_CONNECTION=mysql, DB_DATABASE=myiptv, DB_USERNAME/DB_PASSWORD
-php artisan migrate --seed
-
-# 4. Filas — a validação (HTTP probe + ffprobe) roda na fila "validation",
-#    separada da "default", pra uma importação grande não travar o resto.
-#    QUEUE_CONNECTION=database (ou redis) no .env, depois:
-php artisan queue:work --queue=validation,default
-
-# 5. Sobe o app
-npm run dev        # outro terminal
-php artisan serve
+cp .env.example .env
+docker network create coolify        # uma vez (o compose usa essa rede no Coolify)
+docker compose up -d --build         # http://localhost:7678
+docker compose logs app | grep -A2 "Token de teste"
 ```
 
-`ffprobe` precisa estar instalado e no PATH (parte do ffmpeg) — é ele quem
-confirma que um stream realmente abre, não só que responde 200 OK.
+Desenvolvimento do front: `cd frontend-react && npm ci && npm run dev` (proxy para a API em `localhost:7678`).
 
-## Estrutura do que já está pronto
+## Teste de fumaça (site no ar)
 
-- `database/migrations` — schema completo (sources, playlists, channels,
-  channel_checks, import_runs + as 6 tabelas de metadado).
-- `app/Models` — todas as entidades e relacionamentos.
-- `app/Jobs` — `ImportPlaylistJob` (baixa, detecta playlist vs. mídia direta,
-  faz parse M3U sem descartar headers/EPG/número de canal), `ValidateChannelsJob`
-  (probe HTTP + ffprobe, em lote via `Bus::batch`), `FinalizeImportRunJob`.
-- `app/Support/SafeUrl.php` — bloqueio de SSRF (recusa IP privado/local antes
-  de qualquer request).
-- `app/Http/Controllers/Api/V1` — API v1 única (sessão na web, token no app
-  mobile via Sanctum): playlists, channels (com endpoint "faceted" pros
-  selects encadeados do player), metadata (CRUD genérico das 6 taxonomias).
-- `app/Http/Controllers/Web` + `resources/js/Pages` — as 5 telas pedidas:
-  cadastro de listas, listas carregadas, itens com edição inline, cadastro de
-  metadados, player.
-- `routes/web.php` e `routes/api.php`.
+```bash
+pip install requests
+MPIPTV_BASE_URL=https://seu-dominio MPIPTV_ADMIN_PASS=... python scripts/smoke_test.py
+```
 
-## O que falta (próximos passos, depois do `composer install` local)
+## Catálogo VOD via CSV
 
-- Rodar o setup acima e conferir se tudo sobe sem erro (`php artisan route:list`,
-  lint com Pint/PHPStan).
-- Autenticação: as rotas assumem o middleware `auth` do Breeze.
-- Ajustar `config/queue.php`/`.env` conforme o ambiente real (fila database
-  serve pra começar; Redis quando o volume de validação crescer).
-- Catálogo pré-carregado (iptv-org, Free-TV) e sincronização periódica — fica
-  pra depois desta primeira base estar rodando.
+Modelo em `data/titulos.exemplo.csv` (colunas: `type,title,description,poster_url,genre,year,season_number,episode_number,episode_title,stream_url`).
+Também dá para importar CSV pelo painel (Admin → Cadastrar VOD / Cadastrar listas).
+
+Detalhes de arquitetura e decisões: [ARQUITETURA.md](./ARQUITETURA.md).

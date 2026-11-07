@@ -1,62 +1,87 @@
-version: "3.8"
-
-# Dois serviços a partir da MESMA imagem — só muda o "command":
-#   app    -> nginx + php-fpm (recebe o trafego HTTP; e o que o Coolify
-#             deve apontar como "porta exposta" pro dominio)
-#   worker -> php artisan queue:work, sempre rodando (equivalente ao servico
-#             IptvQueueWorker do Windows, so que aqui quem reinicia sozinho
-#             em caso de crash e o "restart: unless-stopped" do Docker)
+# MPIPTV — compose para Coolify (build pack "Docker Compose") e para uso local.
 #
-# Banco de dados (MySQL) e deixado FORA deste compose de proposito — o ideal
-# no Coolify e criar um recurso de banco separado (ele cuida de backup
-# automatico), e so apontar DB_HOST/DB_PASSWORD etc. nas variaveis de
-# ambiente da aplicacao. Ver .env.example.
+#   app    -> API FastAPI + front estático (porta 7678). É o serviço ao qual o
+#             domínio deve apontar no Coolify (ex.: https://seu-dominio:7678).
+#   worker -> APScheduler: checagem de links, limpeza, jobs periódicos.
+#   mysql  -> MySQL 8 próprio do projeto (volume nomeado; banco novo e vazio).
+#
+# Variáveis SERVICE_PASSWORD_* são "magic variables" do Coolify: ele gera e
+# guarda a senha sozinho. Fora do Coolify, defina-as no .env (ver .env.example).
+# O nome dos serviços (app/worker) é a chave do mapeamento de domínio no
+# Coolify — não renomeie.
+#
+# Uso local: `docker network create coolify` (uma vez) e `docker compose up -d --build`
+# (o docker-compose.override.yaml publica a porta 7678 no host só localmente).
 
 services:
+  mysql:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${SERVICE_PASSWORD_MYSQLROOT:-troque_root}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-iptv}
+      MYSQL_USER: ${MYSQL_USER:-iptv_app}
+      MYSQL_PASSWORD: ${SERVICE_PASSWORD_MYSQL:-troque_app}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
   app:
     build:
       context: .
-      dockerfile: Dockerfile
-    command: ["app"]
+      dockerfile: api/Dockerfile
     restart: unless-stopped
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-iptv}
+      MYSQL_USER: ${MYSQL_USER:-iptv_app}
+      MYSQL_PASSWORD: ${SERVICE_PASSWORD_MYSQL:-troque_app}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${SERVICE_PASSWORD_ADMIN:-}
+      TMDB_API_KEY: ${TMDB_API_KEY:-}
+      # true quando o site é servido por HTTPS (Coolify/Traefik) — cookie só trafega em TLS
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
     expose:
-      - "8080"
-    env_file:
-      - .env
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8080/up"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
+      - "7678"
     volumes:
-      - storage:/var/www/html/storage
+      - app_data:/app/data
+    depends_on:
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:7678/health', timeout=4).status == 200 else 1)"]
+      interval: 30s
+      timeout: 6s
+      retries: 3
+      start_period: 40s
     networks:
-      - coolify
       - default
+      - coolify
 
   worker:
     build:
-      context: .
+      context: ./worker
       dockerfile: Dockerfile
-    command: ["worker"]
     restart: unless-stopped
-    env_file:
-      - .env
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-iptv}
+      MYSQL_USER: ${MYSQL_USER:-iptv_app}
+      MYSQL_PASSWORD: ${SERVICE_PASSWORD_MYSQL:-troque_app}
     depends_on:
-      - app
-    volumes:
-      - storage:/var/www/html/storage
-    networks:
-      - coolify
-      - default
+      mysql:
+        condition: service_healthy
+      app:
+        condition: service_started
 
-# Volume nomeado compartilhado entre "app" e "worker": e onde ficam os CSVs
-# enviados (storage/app/...) e os logs (storage/logs/laravel.log) — sem isso,
-# o worker (container separado) nao enxergaria o arquivo que o "app" acabou
-# de salvar no upload, e o ImportCsvJob falharia dizendo que o CSV nao existe.
 volumes:
-  storage:
+  mysql_data:
+  app_data:
 
 networks:
   coolify:

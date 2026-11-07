@@ -1,0 +1,14 @@
+{
+  "name": "MPIPTV",
+  "short_name": "MPIPTV",
+  "description": "TV ao vivo e catálogo de filmes e séries",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#030509",
+  "theme_color": "#030509",
+  "icons": [
+    { "src": "favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

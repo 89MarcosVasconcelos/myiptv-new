@@ -1,0 +1,6 @@
+# Só para uso local — o `docker compose` junta este arquivo ao docker-compose.yaml
+# automaticamente. O Coolify usa apenas o docker-compose.yaml (sem publicar porta).
+services:
+  app:
+    ports:
+      - "${API_PORT:-7678}:7678"
