@@ -17,6 +17,7 @@ const SECTIONS = [
       ["/admin", "Dashboard", "▦"],
       ["/admin/banco", "Banco de dados", "🗄"],
       ["/admin/usuarios", "Cadastro de usuários", "👥"],
+      ["/admin/fontes", "Importar fontes", "⬇"],
     ],
   },
   {
@@ -62,6 +63,7 @@ const TITLES = {
   "/admin/generos": "Gêneros",
   "/admin/banco": "Banco de dados",
   "/admin/usuarios": "Cadastro de usuários",
+  "/admin/fontes": "Importar fontes",
 };
 
 function titleFor(path) {

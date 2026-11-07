@@ -202,6 +202,28 @@ class AdminSession(Base):
     play_only = Column(Boolean, nullable=False, default=False, server_default="0")
 
 
+class ImportSource(Base):
+    """Fonte de canais (lista M3U) que o admin gerencia na página "Importar fontes".
+
+    origin: preset (iptv-org/Free-TV, já sincronizada alguma vez), custom (URL
+    colada pelo admin) ou github (achada na busca do GitHub).
+    status: approved (pode sincronizar) ou pending (candidata do GitHub
+    esperando o admin aprovar -- nada é importado antes disso)."""
+
+    __tablename__ = "import_sources"
+    __table_args__ = (Index("uq_import_sources_url", "url", unique=True),)
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(200), nullable=False)
+    url = Column(String(500), nullable=False)
+    origin = Column(String(20), nullable=False, default="custom")
+    status = Column(String(20), nullable=False, default="approved")
+    last_sync_at = Column(DateTime)
+    last_status = Column(String(20))  # done | error | running
+    last_summary = Column(Text)  # JSON com os números da última sincronização
+    created_at = Column(DateTime, server_default=func.now())
+
+
 class WorkerRun(Base):
     """1 linha por job do worker (fetch_channels/healthcheck/fetch_epg), sempre
     atualizada — última execução de cada um, pro dashboard."""

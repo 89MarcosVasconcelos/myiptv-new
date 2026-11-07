@@ -28,11 +28,19 @@ vindas do MPIPTV anterior (Laravel/Vue).
 2. Domínio no serviço **`app`** (porta `7678`), ex.: `https://mptv.seudominio.com:7678`.
 3. As senhas `SERVICE_PASSWORD_*` são geradas pelo Coolify. A senha do admin é `SERVICE_PASSWORD_ADMIN`
    (usuário `ADMIN_USERNAME`, padrão `admin`).
-4. Opcional: `TMDB_API_KEY`. Mantenha `COOKIE_SECURE=true` (site em HTTPS).
+4. Opcional: `TMDB_API_KEY` (capas/sinopses) e `GITHUB_TOKEN` (token sem escopos, habilita a busca de listas por código). Mantenha `COOKIE_SECURE=true` (site em HTTPS).
 5. CI: `.github/workflows/deploy.yml` verifica o código e chama o webhook do Coolify se os secrets
    `COOLIFY_WEBHOOK_URL` e `COOLIFY_TOKEN` existirem.
 
 > O compose cria um MySQL **novo** (volume `mysql_data`). Bancos de versões antigas não são reaproveitados.
+
+## Importar fontes (só admin)
+
+Menu **Administração → Importar fontes**: fontes prontas (iptv-org por país/categoria/idioma, Free-TV), URLs
+salvas por você e descoberta no GitHub (varredura de repositório ou busca por código). Candidatas do GitHub
+entram como *pendentes* e nada é importado antes de você aprovar. Só listas de canais ao vivo; adultos são
+pulados por padrão e links mortos descartados. Filmes/séries seguem manuais (CSV), com a escolha do resultado
+certo do TMDB na mesma página. Uso pessoal — sem cadastro público.
 
 ## Rodando local
 

@@ -5,20 +5,22 @@ TMDB (themoviedb.org). Uma busca por título já devolve tudo: `poster_path`,
 Precisa da chave grátis v3 em TMDB_API_KEY (.env). Sem ela o job devolve erro
 claro e não faz nada.
 
-Fallback: quando o TMDB acha o título mas não tem pôster, tenta o pôster no
-endpoint público de autocomplete da IMDb (sem chave).
+(O fallback antigo no autocomplete não documentado da IMDb foi removido: a
+IMDb não oferece API pública e os termos dela proíbem raspagem. Quando o TMDB
+não tem imagem, o título fica sem capa -- dá pra escolher outro resultado à mão
+em "Importar fontes > Capas e dados (TMDB)".)
+
+Este produto usa a API do TMDB, mas não é endossado nem certificado pelo TMDB.
 
 Nunca sobrescreve campo já preenchido — só preenche o que está vazio.
 Mesmo padrão de job em background + progresso do imdb_classifier.py.
 """
 
-import json
 import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
-from urllib.parse import quote
 
 import requests
 
@@ -36,7 +38,7 @@ _TMDB_SEARCH = "https://api.themoviedb.org/3/search/{kind}"
 # vez por título visto, onde a qualidade compensa o custo.
 _TMDB_IMG = "https://image.tmdb.org/t/p/w185{path}"
 _TMDB_BACKDROP = "https://image.tmdb.org/t/p/w780{path}"
-_IMDB_SUGGEST = "https://v2.sg.media-imdb.com/suggestion/{key}/{query}.json"
+_TMDB_DETAIL = "https://api.themoviedb.org/3/{kind}/{tmdb_id}"
 _TIMEOUT = 12
 _WORKERS = 20  # TMDB aguenta ~50 req/s; a resposta demora, 20 concorrentes não chega perto disso
 _UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
@@ -134,38 +136,58 @@ def _search_tmdb(title: str, year, is_series: bool):
                 best = cand
                 break
 
-    date = best.get("release_date") or best.get("first_air_date") or ""
-    is_anime = (best.get("original_language") == "ja") or ("JP" in (best.get("origin_country") or []))
-    vote = best.get("vote_average")
+    return _shape(best)
+
+
+def _shape(item: dict) -> dict:
+    """Resultado do TMDB (busca ou detalhe) -> nosso formato."""
+    date = item.get("release_date") or item.get("first_air_date") or ""
+    is_anime = (item.get("original_language") == "ja") or ("JP" in (item.get("origin_country") or []))
+    genre_ids = item.get("genre_ids")
+    if genre_ids is None:  # endpoint de detalhe devolve "genres": [{id, name}]
+        genre_ids = [g.get("id") for g in (item.get("genres") or [])]
+    vote = item.get("vote_average")
     return {
-        "poster_url": _TMDB_IMG.format(path=best["poster_path"]) if best.get("poster_path") else None,
-        "backdrop_url": _TMDB_BACKDROP.format(path=best["backdrop_path"]) if best.get("backdrop_path") else None,
-        "overview": (best.get("overview") or "").strip() or None,
+        "poster_url": _TMDB_IMG.format(path=item["poster_path"]) if item.get("poster_path") else None,
+        "backdrop_url": _TMDB_BACKDROP.format(path=item["backdrop_path"]) if item.get("backdrop_path") else None,
+        "overview": (item.get("overview") or "").strip() or None,
         "year": int(date[:4]) if date[:4].isdigit() else None,
-        "genre": _pick_genre(best.get("genre_ids"), is_anime),
+        "genre": _pick_genre(genre_ids, is_anime),
         "rating": round(float(vote), 1) if vote else None,
-        "tmdb_id": best.get("id"),
+        "tmdb_id": item.get("id"),
+        "title": item.get("title") or item.get("name"),
     }
 
 
-def _imdb_poster(title: str):
-    """Só o pôster, como fallback quando o TMDB não tem imagem."""
-    q = title.strip()
-    if not q:
-        return None
-    key = next((c.lower() for c in q if c.isalnum()), "x")
+def search_candidates(title: str, year, is_series: bool, limit: int = 8) -> list[dict]:
+    """Vários resultados do TMDB pro admin escolher o certo (a busca automática
+    pega o primeiro, que às vezes erra em título curto/ambíguo)."""
+    if not is_configured():
+        raise RuntimeError("TMDB_API_KEY não configurada no servidor.")
+    kind = "tv" if is_series else "movie"
+    params = {"api_key": TMDB_API_KEY, "language": "pt-BR", "query": title.strip(), "include_adult": "false"}
+    results = _tmdb_get(kind, params)
+    if results is None:
+        raise RuntimeError("o TMDB não respondeu (chave inválida ou serviço fora do ar)")
+    out = [_shape(r) for r in results[:limit]]
+    return out
+
+
+def fetch_details(tmdb_id: int, is_series: bool):
+    """Detalhe de UM título do TMDB já escolhido pelo admin."""
+    if not is_configured():
+        raise RuntimeError("TMDB_API_KEY não configurada no servidor.")
+    kind = "tv" if is_series else "movie"
     try:
-        r = _session().get(_IMDB_SUGGEST.format(key=key, query=quote(q)), timeout=_TIMEOUT)
-        body = r.text.lstrip()
-        if r.status_code != 200 or not body.startswith("{"):
-            return None
-        for d in json.loads(body).get("d") or []:
-            img = d.get("i", {}).get("imageUrl")
-            if str(d.get("id", "")).startswith("tt") and img:
-                return img
-    except (requests.RequestException, ValueError):
+        r = _session().get(_TMDB_DETAIL.format(kind=kind, tmdb_id=int(tmdb_id)),
+                           params={"api_key": TMDB_API_KEY, "language": "pt-BR"}, timeout=_TIMEOUT)
+    except requests.RequestException as e:
+        raise RuntimeError(f"não consegui falar com o TMDB: {e}") from e
+    if r.status_code == 404:
         return None
-    return None
+    if r.status_code != 200:
+        raise RuntimeError(f"o TMDB respondeu HTTP {r.status_code}")
+    return _shape(r.json())
 
 
 # Tentativa anterior aqui limitava a 900 títulos a cada 20min pra "não
@@ -225,8 +247,6 @@ def start_tmdb_job() -> str:
                 if res is None and clean != title.strip():
                     res = _search_tmdb(title, year, typ == "series")
                 poster = res["poster_url"] if res else None
-                if not row[4] and res and not poster:
-                    poster = _imdb_poster(clean)  # fallback só do pôster
                 return row, res, poster
 
             matched = genres = done = 0

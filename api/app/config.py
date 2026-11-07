@@ -47,3 +47,8 @@ IMDB_DATA_DIR = os.environ.get("IMDB_DATA_DIR", "/app/data/imdb")
 # numa única busca — ver api/app/poster_fetch.py. Ausente = o botão do
 # dashboard devolve erro claro e nada acontece.
 TMDB_API_KEY = os.environ.get("TMDB_API_KEY", "")
+
+# token do GitHub (só leitura, sem escopos) pra busca de listas por código na
+# página "Importar fontes". Sem ele, a busca de código fica desligada (a API do
+# GitHub exige login pra isso); a varredura de um repositório funciona mesmo assim.
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")

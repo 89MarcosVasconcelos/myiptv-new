@@ -136,7 +136,21 @@ def _check_row(row: dict, validate: bool) -> str:
     return check_stream(row["stream_url"], VALIDATE_TIMEOUT_SEC, headers)
 
 
-def start_import_job(url: str | None = None, text: str | None = None, validate: bool = True) -> str:
+_ADULT_RE = re.compile(
+    r"\b(xxx|adult|adulto|adultos|porn|porno|pornô|playboy|hentai|erotic|erótic\w*|nsfw|sexy)\b",
+    re.IGNORECASE,
+)
+_PLUS18_RE = re.compile(r"18\s*\+|\+\s*18")
+
+
+def is_adult_row(row: dict) -> bool:
+    """Heurística simples (categoria + nome) pra pular canal adulto na importação."""
+    blob = f"{row.get('category', '')} {row.get('name', '')}"
+    return bool(_ADULT_RE.search(blob) or _PLUS18_RE.search(blob))
+
+
+def start_import_job(url: str | None = None, text: str | None = None, validate: bool = True,
+                     skip_adult: bool = False, on_done=None) -> str:
     if url:
         assert_public_http_url(url)  # falha cedo (na requisição) se a URL for interna
     elif not text or not text.strip():
@@ -174,6 +188,14 @@ def start_import_job(url: str | None = None, text: str | None = None, validate: 
                     unique.append(r)
             rows = unique
 
+            adultos = 0
+            if skip_adult:
+                kept_rows = [r for r in rows if not is_adult_row(r)]
+                adultos = len(rows) - len(kept_rows)
+                rows = kept_rows
+                if not rows:
+                    raise ValueError("todos os canais dessa lista foram filtrados como adultos")
+
             _set(job_id, phase="validando" if validate else "verificando", total=len(rows), processed=0)
             states: dict[int, str] = {}
             done = 0
@@ -184,6 +206,7 @@ def start_import_job(url: str | None = None, text: str | None = None, validate: 
                         for f in futures:
                             f.cancel()
                         _set(job_id, status="cancelled", phase=None)
+                        _notify(on_done, None, "cancelado")
                         return
                     try:
                         states[futures[fut]] = fut.result()
@@ -215,21 +238,34 @@ def start_import_job(url: str | None = None, text: str | None = None, validate: 
                 links_mortos=counts[MORTO],
                 links_bloqueados=counts["bloqueado"],
                 validado=validate,
+                adultos_ignorados=adultos,
             )
             _set(job_id, status="done", phase=None, stats=stats)
+            _notify(on_done, stats, None)
         except (UnsafeUrlError, ValueError) as e:
             _set(job_id, status="error", phase=None, error=str(e))
+            _notify(on_done, None, str(e))
         except Exception as e:  # noqa: BLE001
             logger.exception("Falha ao importar M3U")
             if db is not None:
                 db.rollback()
             _set(job_id, status="error", phase=None, error=str(e))
+            _notify(on_done, None, str(e))
         finally:
             if db is not None:
                 db.close()
 
     threading.Thread(target=_worker, daemon=True, name=f"import-m3u-{job_id[:8]}").start()
     return job_id
+
+
+def _notify(on_done, stats, error) -> None:
+    if on_done is None:
+        return
+    try:
+        on_done(stats, error)
+    except Exception:  # noqa: BLE001 - o callback nunca pode derrubar a importação
+        logger.exception("callback on_done falhou")
 
 
 def get_import_job(job_id: str) -> dict | None:

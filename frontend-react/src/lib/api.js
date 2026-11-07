@@ -165,6 +165,18 @@ export const adminApi = {
   updateStream: (id, b) => jpatch(`admin/streams/${id}`, b),
   delStream: (id) => jdel(`admin/streams/${id}`),
 
+  // importar fontes (só admin)
+  sources: () => req("admin/sources"),
+  addSource: (b) => jpost("admin/sources", b),
+  approveSource: (id) => jpost(`admin/sources/${id}/approve`),
+  deleteSource: (id) => jdel(`admin/sources/${id}`),
+  syncSource: (id, b) => jpost(`admin/sources/${id}/sync`, b),
+  syncPreset: (b) => jpost("admin/sources/sync-preset", b),
+  githubScan: (repo) => jpost("admin/sources/github/scan", { repo }),
+  githubSearch: (query) => jpost("admin/sources/github/search", { query }),
+  tmdbSearch: (params) => req(`admin/tmdb/search?${new URLSearchParams(params)}`),
+  applyTmdb: (titleId, tmdbId) => jpost(`admin/vod/${titleId}/apply-tmdb`, { tmdb_id: tmdbId }),
+
   importM3u: (b) => jpost("admin/channels/import-m3u", b),
   importM3uStatus: (id) => req(`admin/channels/import-m3u/${id}/status`),
   importCsvStatus: (id) => req(`admin/vod/import-csv/${id}/status`),

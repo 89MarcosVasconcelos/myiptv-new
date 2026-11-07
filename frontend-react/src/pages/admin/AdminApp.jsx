@@ -8,6 +8,7 @@ import { AdminChannelCatalog } from "./AdminChannelCatalog.jsx";
 import { AdminSystem } from "./AdminSystem.jsx";
 import { AdminDb } from "./AdminDb.jsx";
 import { AdminUsers } from "./AdminUsers.jsx";
+import { AdminFontes } from "./AdminFontes.jsx";
 
 // o login já aconteceu na entrada do site (App.jsx) — aqui só resta checar
 // o PAPEL da conta: só "admin" pode ver o painel.
@@ -42,6 +43,8 @@ export function AdminApp({ role }) {
       ? AdminDb
       : path === "/admin/usuarios"
       ? AdminUsers
+      : path === "/admin/fontes"
+      ? AdminFontes
       : AdminDashboard;
 
   return <Page />;

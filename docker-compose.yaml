@@ -44,6 +44,7 @@ services:
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
       ADMIN_PASSWORD: ${SERVICE_PASSWORD_ADMIN:-}
       TMDB_API_KEY: ${TMDB_API_KEY:-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       # true quando o site é servido por HTTPS (Coolify/Traefik) — cookie só trafega em TLS
       COOKIE_SECURE: ${COOKIE_SECURE:-true}
     expose:
