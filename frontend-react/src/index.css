@@ -18,6 +18,11 @@
   h1, h2, h3 {
     @apply font-display;
   }
+  /* scrollbar fina e discreta (menu lateral) */
+  .thin-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: #123049 transparent;
+  }
   /* esconde scrollbar das fileiras horizontais mantendo o scroll */
   .no-scrollbar {
     scrollbar-width: none;
@@ -71,13 +76,13 @@
       placeholder:text-muted/60 shadow-sm focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent;
   }
   .nav-link {
-    @apply flex items-center gap-2 rounded-lg px-3 py-2 font-medium text-muted transition
+    @apply flex items-center gap-2 rounded-lg px-3 py-1.5 font-medium text-muted transition
       hover:bg-card-hover hover:text-text;
   }
   .nav-link.active {
     @apply bg-accent/15 text-accent;
   }
   .nav-section {
-    @apply px-3 pb-1 pt-4 text-xs font-semibold uppercase tracking-wider text-muted/70;
+    @apply px-3 pb-1 pt-3 text-xs font-semibold uppercase tracking-wider text-muted/70;
   }
 }

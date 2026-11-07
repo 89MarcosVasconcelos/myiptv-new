@@ -11,6 +11,15 @@ const SECTIONS = [
     items: [["/", "Início", "▚"]],
   },
   {
+    title: "Administração",
+    admin: true,
+    items: [
+      ["/admin", "Dashboard", "▦"],
+      ["/admin/banco", "Banco de dados", "🗄"],
+      ["/admin/usuarios", "Cadastro de usuários", "👥"],
+    ],
+  },
+  {
     title: "Listas",
     admin: true,
     items: [
@@ -34,15 +43,6 @@ const SECTIONS = [
       ["/filmes", "Filmes", "🎬", "movie"],
       ["/series", "Séries", "📺", "series"],
       ["/animes", "Anime", "✦", "anime"],
-    ],
-  },
-  {
-    title: "Administração",
-    admin: true,
-    items: [
-      ["/admin", "Dashboard", "▦"],
-      ["/admin/banco", "Banco de dados", "🗄"],
-      ["/admin/usuarios", "Cadastro de usuários", "👥"],
     ],
   },
 ];
@@ -122,7 +122,7 @@ export function Layout({ isAdmin, username, role, contentTypes, onLogout, childr
             </Link>
           </div>
 
-          <nav class="flex-1 space-y-1 overflow-y-auto px-3 py-4 text-sm no-scrollbar">
+          <nav class="flex-1 space-y-0.5 overflow-y-auto px-3 py-3 text-sm thin-scroll">
             {SECTIONS.filter((s) => !s.admin || isAdmin).map((s) => {
               const items = s.items.filter(([, , , kind]) => !kind || isAdmin || !contentTypes || contentTypes.includes(kind));
               if (!items.length) return null;
