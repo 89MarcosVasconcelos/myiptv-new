@@ -28,11 +28,12 @@ const SECTIONS = [
   },
   {
     title: "Exibição",
+    // 4º item = tipo de conteúdo exigido (conta só vê o que o admin liberou)
     items: [
-      ["/tv", "TV ao vivo", "📡"],
-      ["/filmes", "Filmes", "🎬"],
-      ["/series", "Séries", "📺"],
-      ["/animes", "Anime", "✦"],
+      ["/tv", "TV ao vivo", "📡", "live"],
+      ["/filmes", "Filmes", "🎬", "movie"],
+      ["/series", "Séries", "📺", "series"],
+      ["/animes", "Anime", "✦", "anime"],
     ],
   },
   {
@@ -41,7 +42,7 @@ const SECTIONS = [
     items: [
       ["/admin", "Dashboard", "▦"],
       ["/admin/banco", "Banco de dados", "🗄"],
-      ["/admin/usuarios", "Usuários", "👥"],
+      ["/admin/usuarios", "Cadastro de usuários", "👥"],
     ],
   },
 ];
@@ -60,7 +61,7 @@ const TITLES = {
   "/admin/sistema": "Fila de processamento",
   "/admin/generos": "Gêneros",
   "/admin/banco": "Banco de dados",
-  "/admin/usuarios": "Usuários",
+  "/admin/usuarios": "Cadastro de usuários",
 };
 
 function titleFor(path) {
@@ -88,7 +89,7 @@ export function Brand({ big = false }) {
   );
 }
 
-export function Layout({ isAdmin, username, role, onLogout, children }) {
+export function Layout({ isAdmin, username, role, contentTypes, onLogout, children }) {
   const { path } = useLocation();
   const [open, setOpen] = useState(false);
 
@@ -122,12 +123,16 @@ export function Layout({ isAdmin, username, role, onLogout, children }) {
           </div>
 
           <nav class="flex-1 space-y-1 overflow-y-auto px-3 py-4 text-sm no-scrollbar">
-            {SECTIONS.filter((s) => !s.admin || isAdmin).map((s) => (
-              <div class="space-y-1">
-                {s.title && <p class="nav-section">{s.title}</p>}
-                {s.items.map(link)}
-              </div>
-            ))}
+            {SECTIONS.filter((s) => !s.admin || isAdmin).map((s) => {
+              const items = s.items.filter(([, , , kind]) => !kind || isAdmin || !contentTypes || contentTypes.includes(kind));
+              if (!items.length) return null;
+              return (
+                <div class="space-y-1">
+                  {s.title && <p class="nav-section">{s.title}</p>}
+                  {items.map(link)}
+                </div>
+              );
+            })}
           </nav>
 
           <div class="border-t border-border p-3">

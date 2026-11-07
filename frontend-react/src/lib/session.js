@@ -6,16 +6,19 @@ import { consumeTicketFromUrl } from "./playHost.js";
 // devolve {username, role, token} quando a sessão (cookie) é válida — o
 // token de conteúdo já vem resolvido, sem precisar colar link nenhum.
 export function useSession() {
-  const [s, setS] = useState({ ready: false, authed: false, role: null, token: null, username: null });
+  const [s, setS] = useState({ ready: false, authed: false, role: null, token: null, username: null, name: null, contentTypes: null });
 
   const refresh = useCallback(async () => {
     await consumeTicketFromUrl();
     try {
       const me = await adminApi.me();
       if (me.token) setToken(me.token);
-      setS({ ready: true, authed: true, role: me.role, token: me.token, username: me.username });
+      setS({
+        ready: true, authed: true, role: me.role, token: me.token, username: me.username,
+        name: me.name || null, contentTypes: me.content_types || null,
+      });
     } catch {
-      setS({ ready: true, authed: false, role: null, token: null, username: null });
+      setS({ ready: true, authed: false, role: null, token: null, username: null, name: null, contentTypes: null });
     }
   }, []);
 

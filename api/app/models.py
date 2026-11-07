@@ -4,6 +4,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -176,11 +177,17 @@ class AdminUser(Base):
     id = Column(Integer, primary_key=True)
     username = Column(String(100), unique=True, nullable=False)
     password_hash = Column(String(255), nullable=False)
+    # cadastro feito só pelo admin (menu Usuários): nome de exibição e e-mail
+    name = Column(String(150))
+    email = Column(String(255))
     role = Column(String(20), nullable=False, default="admin", server_default="admin")
     access_token_id = Column(Integer, ForeignKey("access_tokens.id", ondelete="SET NULL"))
     created_at = Column(DateTime, server_default=func.now())
 
     access_token = relationship("AccessToken")
+
+    # mesmo nome da migration 008 (assim o create_all e a migration não duplicam o índice)
+    __table_args__ = (Index("uq_admin_users_email", "email", unique=True),)
 
 
 class AdminSession(Base):
@@ -233,5 +240,8 @@ class AccessToken(Base):
     # filmes, séries, animes) -- padrão False, o admin liga manualmente só pro
     # token que ele mesmo usa (ver ADULT_GENRE/ADULT_CATEGORY nos routers)
     sees_adult_content = Column(Boolean, nullable=False, default=False)
+    # tipos de conteúdo liberados: "live,movie,series,anime" (ver content_access.py).
+    # NULL = tudo liberado
+    content_types = Column(String(100))
     created_at = Column(DateTime, server_default=func.now())
     last_used_at = Column(DateTime)

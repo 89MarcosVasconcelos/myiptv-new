@@ -5,6 +5,7 @@ from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
 
 from ..db import get_db
+from ..content_access import allows_live, vod_clause
 from ..models import AccessToken
 from ..playlist_builder import build_m3u, build_vod_m3u
 from ..security import require_valid_token
@@ -22,7 +23,8 @@ def playlist(
     """Só TV ao vivo -- pra VOD ver /p/{token}/playlist-vod.m3u8 (o catálogo de
     série multiplica por episódio e fica grande demais pra caber junto, ver
     playlist_builder.VOD_M3U_SERIES_MAX_TITLES)."""
-    content = build_m3u(db)
+    # conta sem "TV ao vivo" recebe a playlist vazia (só o cabeçalho)
+    content = build_m3u(db) if allows_live(_access) else "#EXTM3U\n"
     return PlainTextResponse(content, media_type="audio/x-mpegurl")
 
 
@@ -45,6 +47,7 @@ def playlist_vod(
     (ver VOD_M3U_SERIES_MAX_TITLES): sem filtro de gênero, todas as séries
     juntas viram ~85MB/89s de resposta -- combine com `genre` pra série."""
     content = build_vod_m3u(
-        db, type=type, genre=genre, hide_adult=_hide_adult(access), limit=limit, offset=offset
+        db, type=type, genre=genre, hide_adult=_hide_adult(access), limit=limit, offset=offset,
+        extra_filter=vod_clause(access),
     )
     return PlainTextResponse(content, media_type="audio/x-mpegurl")

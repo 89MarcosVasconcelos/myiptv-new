@@ -22,7 +22,13 @@ export function App() {
   }
 
   return (
-    <Layout isAdmin={session.isAdmin} username={session.username} role={session.role} onLogout={session.refresh}>
+    <Layout
+      isAdmin={session.isAdmin}
+      username={session.name || session.username}
+      role={session.role}
+      contentTypes={session.contentTypes}
+      onLogout={session.refresh}
+    >
       <Switch fallback={<Stub />}>
         <Route path="/" component={Home} />
         <Route path="/assistir/:tipo/:id" component={Watch} />

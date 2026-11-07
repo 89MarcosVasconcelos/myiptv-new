@@ -16,6 +16,7 @@ from ..playlist_builder import (
     ranked_stream_urls,
     ranked_streams_by_language,
 )
+from ..content_access import allows_live
 from ..security import require_valid_token
 
 router = APIRouter()
@@ -133,6 +134,8 @@ def list_channels(
     recuperado dos dados originais de importação) -- não confundir com
     `?lang=` do /resolve, que escolhe entre mirrors de ÁUDIO do mesmo canal."""
     response.headers["Cache-Control"] = "public, max-age=120"
+    if not allows_live(_access):
+        return {"count": 0, "channels": []}  # conta sem "TV ao vivo" (ver content_access.py)
     base = _visible_channels_query(db, hide_adult=_hide_adult(_access))
     if category == CATEGORY_NONE:
         base = base.filter(Channel.category.is_(None))
@@ -176,6 +179,8 @@ def list_channel_categories(
     com stream). Antes o chip bar era montado no navegador a partir da lista
     de canais já carregada, sem contagem e sem ordenação por relevância."""
     response.headers["Cache-Control"] = "public, max-age=300"
+    if not allows_live(_access):
+        return {"categories": []}
     return {
         "categories": [
             {"category": c, "label": category_label(None if c == CATEGORY_NONE else c), "count": n}
@@ -195,6 +200,8 @@ def list_channel_languages(
     seletor de idioma da tela de TV ao vivo (pedido do produto em
     2026-09-13). Só aparece pro usuário quando há mais de 1 idioma real."""
     response.headers["Cache-Control"] = "public, max-age=300"
+    if not allows_live(_access):
+        return {"languages": []}
     return {
         "languages": [
             {"language": l, "label": languages.label(None if l == LANGUAGE_NONE else l), "count": n}
@@ -234,6 +241,8 @@ def channels_home(
             )
         return out
 
+    if not allows_live(_access):
+        return {"live_now": [], "rows": []}
     hide_adult = _hide_adult(_access)
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     live_channels = (
@@ -272,7 +281,7 @@ def channel_detail(
     que passou a trazer só a 1ª página -- qualquer canal fora dela dava
     "Canal não encontrado ou fora do ar", ou seja, quase todos)."""
     channel = db.query(Channel).filter(Channel.tvg_id == tvg_id, Channel.is_active.is_(True)).first()
-    if channel is None or (channel.category == ADULT_CATEGORY and _hide_adult(_access)):
+    if channel is None or not allows_live(_access) or (channel.category == ADULT_CATEGORY and _hide_adult(_access)):
         raise HTTPException(status_code=404, detail="Canal não encontrado")
 
     now_playing = now_playing_map(db, [channel.id])
@@ -302,6 +311,8 @@ def resolve_channel(
     # categoria "Adulto" só pro token autorizado -- mesma regra do VOD
     if channel is not None and channel.category == ADULT_CATEGORY and _hide_adult(_access):
         channel = None
+    if not allows_live(_access):
+        channel = None
     if channel is None:
         raise HTTPException(status_code=404, detail="Canal não encontrado")
 
@@ -323,7 +334,7 @@ def channel_epg(
     Nem todo canal tem EPG — a fonte cruza por nome exato, então cobre uma
     fração do catálogo (ver ARQUITETURA.md seção 8.3)."""
     channel = db.query(Channel).filter(Channel.tvg_id == tvg_id).first()
-    if channel is None:
+    if channel is None or not allows_live(_access):
         raise HTTPException(status_code=404, detail="Canal não encontrado")
 
     programs = upcoming_programs(db, channel.id)

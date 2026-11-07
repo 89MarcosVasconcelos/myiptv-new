@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session, joinedload
 from .. import languages
 from ..db import get_db
 from ..models import AccessToken, VodItem, VodStream, VodTitle, WatchProgress
+from ..content_access import title_allowed, vod_clause
 from ..security import require_valid_token
 from ..vod_mirrors import item_is_available, ranked_mirror_urls
 
@@ -74,6 +75,9 @@ def list_vod(
     campo `available`; ficava a critério do FRONTEND esconder, e ele não
     escondia."""
     base = db.query(VodTitle).filter(VodTitle.items.any(VodItem.stream_url.isnot(None)))
+    allowed = vod_clause(_access)
+    if allowed is not None:
+        base = base.filter(allowed)
     if _hide_adult(_access):
         # genre != ADULT_GENRE sozinho excluiria também quem tem genre NULL
         # (NULL != 'Adulto' dá NULL em SQL, não TRUE) -- por isso o OR explícito
@@ -138,7 +142,7 @@ def list_vod(
     }
 
 
-def _genre_counts(db, type: Optional[str] = None, include_adult: bool = False):  # noqa: A002 - nome claro pro cliente
+def _genre_counts(db, type: Optional[str] = None, include_adult: bool = False, access=None):  # noqa: A002 - nome claro pro cliente
     """[(genre_ou_'Outros', count)] ordenado do maior pro menor. 'Outros' (sem
     gênero) sempre por último. Com `type`, conta só filme OU série.
     `include_adult=True` é só pro admin (ver /admin/vod/genres) -- o público
@@ -154,6 +158,9 @@ def _genre_counts(db, type: Optional[str] = None, include_adult: bool = False): 
     )
     if not include_adult:
         q = q.filter(or_(VodTitle.genre != ADULT_GENRE, VodTitle.genre.is_(None)))
+    allowed = vod_clause(access)
+    if allowed is not None:
+        q = q.filter(allowed)
     if type in ("movie", "series"):
         q = q.filter(VodTitle.type == type)
     rows = q.group_by(VodTitle.genre).all()
@@ -179,7 +186,7 @@ def list_vod_genres(
     return {
         "genres": [
             {"genre": g, "count": c}
-            for g, c in _genre_counts(db, type, include_adult=not _hide_adult(_access))
+            for g, c in _genre_counts(db, type, include_adult=not _hide_adult(_access), access=_access)
         ]
     }
 
@@ -200,6 +207,9 @@ def list_vod_languages(
     )
     if _hide_adult(_access):
         q = q.filter(or_(VodTitle.genre != ADULT_GENRE, VodTitle.genre.is_(None)))
+    allowed = vod_clause(_access)
+    if allowed is not None:
+        q = q.filter(allowed)
     if type in ("movie", "series"):
         q = q.filter(VodTitle.type == type)
     rows = q.group_by(VodTitle.language).all()
@@ -225,8 +235,11 @@ def vod_home(
     """As primeiras fileiras da Home num request só (senão a Home dispara ~20
     requests, um por gênero). Sem itens/episódios."""
     out = []
-    for genre, _count in _genre_counts(db, include_adult=not _hide_adult(_access))[:max_genres]:
+    for genre, _count in _genre_counts(db, include_adult=not _hide_adult(_access), access=_access)[:max_genres]:
         q = db.query(VodTitle).filter(VodTitle.items.any(VodItem.stream_url.isnot(None)))
+        allowed = vod_clause(_access)
+        if allowed is not None:
+            q = q.filter(allowed)
         if genre == GENRE_NONE:
             q = q.filter(VodTitle.genre.is_(None))
         else:
@@ -266,7 +279,7 @@ def vod_detail(
     )
     # gênero "Adulto" só pro token autorizado -- 404 (não 403, mesma lógica do
     # require_valid_token) pra não confirmar que o ID existe
-    if t is None or (t.genre == ADULT_GENRE and _hide_adult(_access)):
+    if t is None or (t.genre == ADULT_GENRE and _hide_adult(_access)) or not title_allowed(_access, t):
         raise HTTPException(status_code=404, detail="Título não encontrado")
 
     items = sorted(t.items, key=lambda i: (i.season_number or 0, i.episode_number or 0))
@@ -330,6 +343,9 @@ def resolve_vod_item(
     )
     # gênero "Adulto" só pro token autorizado -- mesma regra do vod_detail
     if item is not None and item.vod_title.genre == ADULT_GENRE and _hide_adult(_access):
+        item = None
+    # tipo de conteúdo não liberado pra esta conta (ver content_access.py)
+    if item is not None and not title_allowed(_access, item.vod_title):
         item = None
     if item is None:
         raise HTTPException(status_code=404, detail="Item não encontrado")
@@ -474,7 +490,7 @@ def continue_watching(
     out = []
     for r in rows:
         t = titles.get(r.title_id)
-        if t is None:
+        if t is None or not title_allowed(_access, t):
             continue
         it = items.get(r.item_id) if r.item_id else None
         ep_label = None

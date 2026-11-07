@@ -128,6 +128,7 @@ export const adminApi = {
   users: () => req("admin/users"),
   createUser: (b) => jpost("admin/users", b),
   deleteUser: (id) => jdel(`admin/users/${id}`),
+  setUserContentTypes: (id, types) => jpatch(`admin/users/${id}/content-types`, { content_types: types }),
   setUserAdultContent: (id, sees) => jpatch(`admin/users/${id}/adult-content`, { sees_adult_content: sees }),
 
   // gêneros manuais

@@ -200,6 +200,7 @@ def _vod_titles_page(
     hide_adult: bool = True,
     limit: int | None = None,
     offset: int = 0,
+    extra_filter=None,
 ) -> list[VodTitle]:
     """Mesmo filtro de disponibilidade/gênero/adulto do GET /p/{token}/vod
     (routers/vod.py:list_vod), só que devolvendo os objetos `VodTitle` em vez
@@ -212,6 +213,8 @@ def _vod_titles_page(
     base = db.query(VodTitle).filter(VodTitle.items.any(VodItem.stream_url.isnot(None)))
     if hide_adult:
         base = base.filter(or_(VodTitle.genre != _ADULT_GENRE, VodTitle.genre.is_(None)))
+    if extra_filter is not None:
+        base = base.filter(extra_filter)
     if type in ("movie", "series"):
         base = base.filter(VodTitle.type == type)
     if genre == _GENRE_NONE:
@@ -231,6 +234,7 @@ def _vod_m3u_lines(
     hide_adult: bool = True,
     limit: int | None = None,
     offset: int = 0,
+    extra_filter=None,
 ):
     """Filme = 1 entrada em group-title "Filmes". Série = cada TÍTULO vira o
     próprio group-title (assim os episódios ficam agrupados como "categoria"
@@ -238,7 +242,7 @@ def _vod_m3u_lines(
 
     Traz a lista COMPLETA do filtro (`type`/`genre`) por padrão -- ver
     _vod_titles_page pro motivo do teto ser diferente pra filme e série."""
-    titles = _vod_titles_page(db, type, genre, hide_adult, limit, offset)
+    titles = _vod_titles_page(db, type, genre, hide_adult, limit, offset, extra_filter)
     title_ids = [t.id for t in titles]
     if not title_ids:
         return
@@ -308,11 +312,14 @@ def build_vod_m3u(
     hide_adult: bool = True,
     limit: int | None = None,
     offset: int = 0,
+    extra_filter=None,
 ) -> str:
     """Playlist M3U só de VOD (ver _vod_m3u_lines pro comportamento de
     limit=None). Usada por um link separado do playlist.m3u8 principal."""
     lines = ["#EXTM3U"]
-    lines.extend(_vod_m3u_lines(db, type=type, genre=genre, hide_adult=hide_adult, limit=limit, offset=offset))
+    lines.extend(_vod_m3u_lines(
+            db, type=type, genre=genre, hide_adult=hide_adult, limit=limit, offset=offset, extra_filter=extra_filter
+        ))
     return "\n".join(lines) + "\n"
 
 

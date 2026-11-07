@@ -2,6 +2,7 @@
 séries) via formulário web, além do importador CSV (api/app/import_vod.py,
 continua existindo pra cargas em lote)."""
 
+import re
 import secrets
 import threading
 import time
@@ -10,7 +11,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Response, UploadFile
 from pydantic import BaseModel
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, joinedload
 
 from ..auth_admin import (
@@ -44,6 +45,13 @@ from ..import_channels import get_import_job as get_import_channels_job, start_i
 from ..import_m3u import get_import_job as get_import_m3u_job, start_import_job as start_import_m3u_job
 from ..safe_url import UnsafeUrlError
 from ..manual_healthcheck import get_healthcheck_job, start_healthcheck_job
+from ..content_access import (
+    ALL_KINDS,
+    KIND_LABELS,
+    allowed_kinds,
+    normalize as normalize_kinds,
+    serialize as serialize_kinds,
+)
 from ..models import AccessToken, AdminUser, Channel, GenreKeyword, Stream, VodItem, VodTitle, WorkerRun
 from ..system_info import snapshot as system_snapshot, top_processes
 from ..vod_mirrors import upsert_mirror
@@ -116,7 +124,13 @@ class GenreKeywordRequest(BaseModel):
 
 @router.post("/login")
 def login(payload: LoginRequest, response: Response, db: Session = Depends(get_db)):
-    user = db.query(AdminUser).filter(AdminUser.username == payload.username).first()
+    # entra com o usuário OU com o e-mail cadastrado
+    ident = payload.username.strip()
+    user = (
+        db.query(AdminUser)
+        .filter(or_(AdminUser.username == ident, AdminUser.email == ident))
+        .first()
+    )
     if user is None or not verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Usuário ou senha inválidos")
 
@@ -195,7 +209,16 @@ def me(user: AdminUser = Depends(require_login), db: Session = Depends(get_db)):
         # comportamento de antes, quando o front buscava via /admin/tokens)
         t = db.query(AccessToken).filter(AccessToken.is_active.is_(True)).order_by(AccessToken.created_at).first()
         token = t.token if t else None
-    return {"username": user.username, "role": user.role, "token": token}
+    kinds = sorted(allowed_kinds(user.access_token)) if user.access_token else list(ALL_KINDS)
+    return {
+        "username": user.username,
+        "name": user.name,
+        "email": user.email,
+        "role": user.role,
+        "token": token,
+        # tipos liberados pra essa conta (admin sempre vê tudo)
+        "content_types": list(ALL_KINDS) if user.role == "admin" else [k for k in ALL_KINDS if k in kinds],
+    }
 
 
 @router.get("/dashboard")
@@ -1094,29 +1117,40 @@ def db_execute_status(job_id: str, _admin: AdminUser = Depends(require_admin)):
 # ---------------- Usuários do site (login admin/usuário) ----------------
 
 
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
 class UserCreateRequest(BaseModel):
-    username: str
+    name: str
+    email: str
     password: str
     role: str = "user"  # "admin" ou "user"
+    content_types: list[str] = []  # tipos liberados: live, movie, series, anime
     label: Optional[str] = None  # rótulo do token, só pra role "user"
+
+
+class UserContentRequest(BaseModel):
+    content_types: list[str]
+
+
+def _user_row(u: AdminUser) -> dict:
+    return {
+        "id": u.id,
+        "name": u.name,
+        "email": u.email,
+        "username": u.username,
+        "role": u.role,
+        "token": u.access_token.token if u.access_token else None,
+        "sees_adult_content": u.access_token.sees_adult_content if u.access_token else False,
+        "content_types": [k for k in ALL_KINDS if k in allowed_kinds(u.access_token)] if u.access_token else None,
+        "created_at": u.created_at.isoformat() if u.created_at else None,
+    }
 
 
 @router.get("/users")
 def list_users(db: Session = Depends(get_db), _admin: AdminUser = Depends(require_admin)):
     users = db.query(AdminUser).order_by(AdminUser.created_at).all()
-    return {
-        "users": [
-            {
-                "id": u.id,
-                "username": u.username,
-                "role": u.role,
-                "token": u.access_token.token if u.access_token else None,
-                "sees_adult_content": u.access_token.sees_adult_content if u.access_token else False,
-                "created_at": u.created_at.isoformat() if u.created_at else None,
-            }
-            for u in users
-        ]
-    }
+    return {"users": [_user_row(u) for u in users], "content_kinds": [{"id": k, "label": KIND_LABELS[k]} for k in ALL_KINDS]}
 
 
 class AdultContentRequest(BaseModel):
@@ -1144,28 +1178,68 @@ def set_user_adult_content(
     return {"ok": True}
 
 
+@router.patch("/users/{user_id}/content-types")
+def set_user_content_types(
+    user_id: int,
+    payload: UserContentRequest,
+    db: Session = Depends(get_db),
+    _admin: AdminUser = Depends(require_admin),
+):
+    """Troca os tipos de conteúdo (TV ao vivo/Filmes/Séries/Anime) que a conta
+    pode assistir. Vale na hora — a checagem é feita a cada request."""
+    user = db.query(AdminUser).filter(AdminUser.id == user_id).first()
+    if user is None:
+        raise HTTPException(status_code=404, detail="usuário não encontrado")
+    if user.access_token is None:
+        raise HTTPException(status_code=400, detail="contas admin sempre veem tudo")
+    kinds = normalize_kinds(payload.content_types)
+    if not kinds:
+        raise HTTPException(status_code=400, detail="escolha pelo menos um tipo de conteúdo")
+    user.access_token.content_types = serialize_kinds(kinds)
+    db.commit()
+    return {"ok": True, "content_types": kinds}
+
+
 @router.post("/users")
 def create_user(
     payload: UserCreateRequest,
     db: Session = Depends(get_db),
     _admin: AdminUser = Depends(require_admin),
 ):
+    """ÚNICO caminho de cadastro de conta: só o admin logado cria usuários (não
+    existe rota pública de registro)."""
     if payload.role not in ("admin", "user"):
         raise HTTPException(status_code=400, detail="role precisa ser 'admin' ou 'user'")
-    if not payload.username.strip() or not payload.password:
-        raise HTTPException(status_code=400, detail="usuário e senha são obrigatórios")
-    if db.query(AdminUser).filter(AdminUser.username == payload.username).first():
-        raise HTTPException(status_code=409, detail="já existe um usuário com esse nome")
+    name = payload.name.strip()
+    email = payload.email.strip().lower()
+    if not name:
+        raise HTTPException(status_code=400, detail="informe o nome")
+    if not _EMAIL_RE.match(email) or len(email) > 100:
+        raise HTTPException(status_code=400, detail="e-mail inválido")
+    if len(payload.password) < 6:
+        raise HTTPException(status_code=400, detail="a senha precisa ter pelo menos 6 caracteres")
+    kinds = normalize_kinds(payload.content_types)
+    if payload.role == "user" and not kinds:
+        raise HTTPException(status_code=400, detail="escolha pelo menos um tipo de conteúdo")
+    if db.query(AdminUser).filter(or_(AdminUser.email == email, AdminUser.username == email)).first():
+        raise HTTPException(status_code=409, detail="já existe um usuário com esse e-mail")
 
     user = AdminUser(
-        username=payload.username.strip(),
+        # o e-mail também é o login (usuario == e-mail)
+        username=email,
+        email=email,
+        name=name,
         password_hash=hash_password(payload.password),
         role=payload.role,
     )
     if payload.role == "user":
         # cada usuário comum ganha seu próprio token de conteúdo — assim dá
         # pra revogar 1 pessoa sem afetar as outras
-        access = AccessToken(token=secrets.token_urlsafe(24), label=payload.label or payload.username)
+        access = AccessToken(
+            token=secrets.token_urlsafe(24),
+            label=payload.label or name,
+            content_types=serialize_kinds(kinds),
+        )
         db.add(access)
         db.flush()
         user.access_token_id = access.id
