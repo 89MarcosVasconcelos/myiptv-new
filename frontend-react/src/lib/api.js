@@ -103,7 +103,7 @@ export const adminApi = {
   // jobs (todos: POST inicia -> {job_id}; GET status)
   startClassifyImdb: () => jpost("admin/vod/classify-genres-imdb"),
   classifyImdbStatus: (id) => req(`admin/vod/classify-genres-imdb/${id}/status`),
-  startFetchMetadata: () => jpost("admin/vod/fetch-metadata"),
+  startFetchMetadata: (mode = "incremental") => jpost(`admin/vod/fetch-metadata?mode=${mode}`),
   fetchMetadataStatus: (id) => req(`admin/vod/fetch-metadata/${id}/status`),
   startHealthcheck: () => jpost("admin/healthcheck"),
   healthcheckStatus: (id) => req(`admin/healthcheck/${id}/status`),
@@ -174,6 +174,7 @@ export const adminApi = {
   syncPreset: (b) => jpost("admin/sources/sync-preset", b),
   githubScan: (repo) => jpost("admin/sources/github/scan", { repo }),
   githubSearch: (query) => jpost("admin/sources/github/search", { query }),
+  tmdbStats: () => req("admin/tmdb/stats"),
   tmdbSearch: (params) => req(`admin/tmdb/search?${new URLSearchParams(params)}`),
   applyTmdb: (titleId, tmdbId) => jpost(`admin/vod/${titleId}/apply-tmdb`, { tmdb_id: tmdbId }),
 

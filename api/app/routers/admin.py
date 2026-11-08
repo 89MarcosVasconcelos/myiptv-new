@@ -928,11 +928,14 @@ def classify_genres_imdb_status(job_id: str, _admin: AdminUser = Depends(require
 
 
 @router.post("/vod/fetch-metadata")
-def fetch_vod_metadata(_admin: AdminUser = Depends(require_admin)):
-    """Dispara em background: busca o pôster (e o ano, se faltar) no endpoint
-    público de autocomplete da IMDb pra todo título VOD sem pôster. Não precisa
-    de conta nem de chave. Nunca sobrescreve pôster já preenchido."""
-    job_id = start_tmdb_job()
+def fetch_vod_metadata(mode: str = "incremental", _admin: AdminUser = Depends(require_admin)):
+    """Dispara em background a carga de capa/sinopse/nota/ano/gênero pelo TMDB.
+    mode=incremental (padrão, "carga complementar"): só o que falta, sem sobrescrever.
+    mode=full ("carga geral"): todos os títulos, sobrescrevendo com o que o TMDB devolve."""
+    try:
+        job_id = start_tmdb_job(mode)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     return {"job_id": job_id}
 
 

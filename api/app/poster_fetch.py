@@ -174,20 +174,51 @@ def search_candidates(title: str, year, is_series: bool, limit: int = 8) -> list
 
 
 def fetch_details(tmdb_id: int, is_series: bool):
-    """Detalhe de UM título do TMDB já escolhido pelo admin."""
+    """Detalhe de UM título do TMDB (id já conhecido). None se o id não existe mais."""
     if not is_configured():
         raise RuntimeError("TMDB_API_KEY não configurada no servidor.")
     kind = "tv" if is_series else "movie"
-    try:
-        r = _session().get(_TMDB_DETAIL.format(kind=kind, tmdb_id=int(tmdb_id)),
-                           params={"api_key": TMDB_API_KEY, "language": "pt-BR"}, timeout=_TIMEOUT)
-    except requests.RequestException as e:
-        raise RuntimeError(f"não consegui falar com o TMDB: {e}") from e
-    if r.status_code == 404:
-        return None
-    if r.status_code != 200:
-        raise RuntimeError(f"o TMDB respondeu HTTP {r.status_code}")
-    return _shape(r.json())
+    last = None
+    for attempt in range(4):
+        try:
+            r = _session().get(_TMDB_DETAIL.format(kind=kind, tmdb_id=int(tmdb_id)),
+                               params={"api_key": TMDB_API_KEY, "language": "pt-BR"}, timeout=_TIMEOUT)
+        except requests.RequestException as e:
+            last = f"não consegui falar com o TMDB: {e}"
+            time.sleep(1 + attempt)
+            continue
+        if r.status_code == 429:
+            last = "o TMDB limitou as consultas (HTTP 429)"
+            time.sleep(float(r.headers.get("Retry-After", 2)) + 0.5)
+            continue
+        if r.status_code == 404:
+            return None
+        if r.status_code != 200:
+            raise RuntimeError(f"o TMDB respondeu HTTP {r.status_code}")
+        return _shape(r.json())
+    raise RuntimeError(last or "falha ao consultar o TMDB")
+
+
+MODES = ("incremental", "full")
+
+
+def _missing_filter():
+    """Título com algum dado ainda faltando (a "carga complementar" só mexe nesses)."""
+    return (
+        VodTitle.poster_url.is_(None)
+        | VodTitle.description.is_(None)
+        | VodTitle.genre.is_(None)
+        | VodTitle.backdrop_url.is_(None)
+        | VodTitle.rating.is_(None)
+        | VodTitle.tmdb_id.is_(None)
+    )
+
+
+def metadata_stats(db) -> dict:
+    from sqlalchemy import func
+    total = db.query(func.count(VodTitle.id)).scalar() or 0
+    missing = db.query(func.count(VodTitle.id)).filter(_missing_filter()).scalar() or 0
+    return {"total": total, "missing": missing}
 
 
 # Tentativa anterior aqui limitava a 900 títulos a cada 20min pra "não
@@ -206,82 +237,92 @@ def _set(job_id, **kw):
         _jobs[job_id].update(kw)
 
 
-def start_tmdb_job() -> str:
+def start_tmdb_job(mode: str = "incremental") -> str:
+    """mode="incremental" (carga complementar): só títulos com algo faltando e só
+    preenche campo vazio. mode="full" (carga geral): todos os títulos; o que o TMDB
+    devolve sobrescreve o que já existe (gênero Anime/Adulto é preservado). Título
+    que já tem tmdb_id é consultado direto por ele (preciso); sem id, por busca."""
+    if mode not in MODES:
+        raise ValueError("modo inválido")
     job_id = uuid.uuid4().hex
     with _lock:
         _jobs[job_id] = {
-            "status": "running", "phase": "buscando no TMDB",
-            "processed": 0, "total": 0, "matched": 0, "genres": 0, "error": None,
-            "started_at": datetime.now(timezone.utc).isoformat(),
+            "status": "running", "phase": "buscando no TMDB", "mode": mode,
+            "processed": 0, "total": 0, "matched": 0, "genres": 0, "updated": 0, "not_found": 0,
+            "error": None, "started_at": datetime.now(timezone.utc).isoformat(),
         }
-    register("Buscar capas + dados (TMDB)", job_id, get_tmdb_job)
+    register("Carga geral (TMDB)" if mode == "full" else "Carga complementar (TMDB)", job_id, get_tmdb_job)
+    full = mode == "full"
 
     def _worker():
         db = SessionLocal()
         try:
             if not is_configured():
-                raise RuntimeError("TMDB_API_KEY não configurada no .env do servidor.")
+                raise RuntimeError("TMDB_API_KEY não configurada no servidor.")
 
-            # tudo que ainda falta pôster OU sinopse OU gênero
-            rows = list(
-                db.query(
-                    VodTitle.id, VodTitle.title, VodTitle.year, VodTitle.type,
-                    VodTitle.poster_url.isnot(None), VodTitle.description.isnot(None),
-                    VodTitle.genre.isnot(None), VodTitle.backdrop_url.isnot(None),
-                    VodTitle.rating.isnot(None),
-                ).filter(
-                    VodTitle.poster_url.is_(None)
-                    | VodTitle.description.is_(None)
-                    | VodTitle.genre.is_(None)
-                    | VodTitle.backdrop_url.is_(None)
-                    | VodTitle.rating.is_(None)
-                    | VodTitle.tmdb_id.is_(None)
-                )
+            q = db.query(
+                VodTitle.id, VodTitle.title, VodTitle.year, VodTitle.type, VodTitle.tmdb_id, VodTitle.genre,
+                VodTitle.poster_url.isnot(None), VodTitle.description.isnot(None),
+                VodTitle.genre.isnot(None), VodTitle.backdrop_url.isnot(None),
+                VodTitle.rating.isnot(None),
             )
+            if not full:
+                q = q.filter(_missing_filter())
+            rows = list(q)
             _set(job_id, total=len(rows))
 
             def task(row):
-                tid, title, year, typ = row[0], row[1], row[2], row[3]
-                clean, clean_year = _clean_title(title, year)
-                res = _search_tmdb(clean, clean_year, typ == "series")
-                if res is None and clean != title.strip():
-                    res = _search_tmdb(title, year, typ == "series")
-                poster = res["poster_url"] if res else None
-                return row, res, poster
+                title, year, typ, tmdb_id = row[1], row[2], row[3], row[4]
+                is_series = typ == "series"
+                res = None
+                if tmdb_id:
+                    try:
+                        res = fetch_details(tmdb_id, is_series)
+                    except RuntimeError:
+                        res = None
+                if res is None:
+                    clean, clean_year = _clean_title(title, year)
+                    res = _search_tmdb(clean, clean_year, is_series)
+                    if res is None and clean != title.strip():
+                        res = _search_tmdb(title, year, is_series)
+                return row, res
 
-            matched = genres = done = 0
+            matched = genres = updated = not_found = done = 0
             cancelled = False
-            _set(job_id, phase="buscando no TMDB")
 
             with ThreadPoolExecutor(max_workers=_WORKERS) as pool:
                 futs = [pool.submit(task, r) for r in rows]
                 for fut in as_completed(futs):
-                    row, res, poster = fut.result()
-                    tid, _t, year, _typ, has_poster, has_desc, has_genre, has_bd, has_rating = row
+                    row, res = fut.result()
+                    tid, _t, year, _typ, _tmdb, cur_genre = row[:6]
+                    has_poster, has_desc, has_genre, has_bd, has_rating = row[6:]
                     done += 1
                     vals = {}
-                    if poster and not has_poster:
-                        vals["poster_url"] = poster
-                        matched += 1
-                    if res:
-                        if res["overview"] and not has_desc:
-                            vals["description"] = res["overview"]
-                        if res["year"] and not year:
-                            vals["year"] = res["year"]
-                        if res["genre"] and not has_genre:
+                    if res is None:
+                        not_found += 1
+                    else:
+                        def put(field, value, has):
+                            if value is not None and (full or not has):
+                                vals[field] = value
+                        put("poster_url", res["poster_url"], has_poster)
+                        put("backdrop_url", res["backdrop_url"], has_bd)
+                        put("description", res["overview"], has_desc)
+                        put("rating", res["rating"], has_rating)
+                        put("year", res["year"], year is not None)
+                        if res["genre"] and (not has_genre or (full and cur_genre not in ("Anime", "Adulto"))):
                             vals["genre"] = res["genre"]
-                            genres += 1
-                        if res["backdrop_url"] and not has_bd:
-                            vals["backdrop_url"] = res["backdrop_url"]
-                        if res["rating"] and not has_rating:
-                            vals["rating"] = res["rating"]
                         if res["tmdb_id"]:
                             vals["tmdb_id"] = res["tmdb_id"]
+                        if "poster_url" in vals and not has_poster:
+                            matched += 1
+                        if "genre" in vals:
+                            genres += 1
                     if vals:
+                        updated += 1
                         db.query(VodTitle).filter(VodTitle.id == tid).update(vals, synchronize_session=False)
                     if done % 50 == 0:
                         db.commit()
-                        _set(job_id, processed=done, matched=matched, genres=genres)
+                        _set(job_id, processed=done, matched=matched, genres=genres, updated=updated, not_found=not_found)
                     if is_cancelled(job_id):
                         cancelled = True
                         for f in futs:
@@ -289,14 +330,12 @@ def start_tmdb_job() -> str:
                         break
 
             db.commit()
-            _set(job_id, processed=done, matched=matched, genres=genres)
+            _set(job_id, processed=done, matched=matched, genres=genres, updated=updated, not_found=not_found)
 
             if cancelled:
-                _set(job_id, status="cancelled", phase=f"cancelado em {done} de {len(rows)}",
-                     processed=done, matched=matched, genres=genres)
+                _set(job_id, status="cancelled", phase=f"cancelado em {done} de {len(rows)}")
             else:
-                _set(job_id, status="done", phase="concluído", processed=len(rows),
-                     matched=matched, genres=genres)
+                _set(job_id, status="done", phase="concluído", processed=len(rows))
         except Exception as e:
             db.rollback()
             _set(job_id, status="error", error=str(e))

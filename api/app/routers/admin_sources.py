@@ -163,6 +163,12 @@ def tmdb_search(title: str, type: str = "movie", year: Optional[int] = None,  # 
         raise HTTPException(400, str(e)) from e
 
 
+@router.get("/tmdb/stats")
+def tmdb_stats(db: Session = Depends(get_db), _admin: AdminUser = Depends(require_admin)):
+    """Quantos títulos existem e quantos ainda têm dado faltando (carga complementar)."""
+    return poster_fetch.metadata_stats(db)
+
+
 class TmdbApply(BaseModel):
     tmdb_id: int
 

@@ -342,6 +342,8 @@ function TmdbTools({ configured }) {
       {!configured && (
         <p class="text-xs text-warn mb-2">TMDB_API_KEY não está configurada no servidor — configure para usar esta seção.</p>
       )}
+      <TmdbLoad configured={configured} />
+      <div class="text-[12px] uppercase tracking-wide text-muted mt-5 mb-2">Corrigir um título à mão</div>
       <form class="flex gap-2 mb-2" onSubmit={findTitles}>
         <input class={inp + " flex-1"} placeholder="Buscar título do catálogo (ex.: Vingadores)" value={q}
           onInput={(e) => setQ(e.currentTarget.value)} />
@@ -382,9 +384,111 @@ function TmdbTools({ configured }) {
         </div>
       )}
       <p class="text-[11px] text-muted mt-3">
-        Este produto usa a API do TMDB, mas não é endossado nem certificado pelo TMDB. Para preencher em lote os
-        títulos sem capa, use o botão de metadados no Dashboard.
+        Este produto usa a API do TMDB, mas não é endossado nem certificado pelo TMDB.
       </p>
     </Panel>
+  );
+}
+
+// cargas em lote do TMDB: complementar (só o que falta) e geral (todos os títulos)
+function TmdbLoad({ configured }) {
+  const [stats, setStats] = useState(null);
+  const [job, setJob] = useState(null); // {id, mode, status, phase, processed, total, ...}
+  const [confirm, setConfirm] = useState(false);
+  const [err, setErr] = useState("");
+  const timer = useRef(null);
+
+  const loadStats = () => adminApi.tmdbStats().then(setStats).catch(() => {});
+  useEffect(() => {
+    loadStats();
+    return () => clearTimeout(timer.current);
+  }, []);
+
+  const running = job?.status === "running";
+
+  async function poll(id, mode) {
+    try {
+      const j = await adminApi.fetchMetadataStatus(id);
+      setJob({ ...j, id, mode });
+      if (j.status === "running") timer.current = setTimeout(() => poll(id, mode), 1000);
+      else loadStats();
+    } catch (e) {
+      setErr(e.message);
+    }
+  }
+
+  async function start(mode) {
+    setErr("");
+    setConfirm(false);
+    try {
+      const { job_id } = await adminApi.startFetchMetadata(mode);
+      setJob({ id: job_id, mode, status: "running", processed: 0, total: 0 });
+      poll(job_id, mode);
+    } catch (e) {
+      setErr(e.message);
+    }
+  }
+
+  const pct = job?.total ? Math.round((job.processed / job.total) * 100) : null;
+
+  return (
+    <div data-testid="tmdb-load">
+      <p class="text-xs text-muted mb-3">
+        Busca no TMDB capa, fundo, sinopse, ano, gênero e nota dos títulos do catálogo
+        {stats ? ` (${stats.total} no total, ${stats.missing} com algum dado faltando)` : ""}.
+      </p>
+      <div class="flex flex-wrap gap-2">
+        <button class="btn" disabled={!configured || running} onClick={() => start("incremental")}>
+          Carga complementar{stats ? ` (${stats.missing})` : ""}
+        </button>
+        <button class="btn" disabled={!configured || running} onClick={() => setConfirm(true)}>
+          Carga geral{stats ? ` (${stats.total})` : ""}
+        </button>
+      </div>
+      <p class="text-[11px] text-muted mt-2">
+        <b>Complementar:</b> só o que ainda falta; nunca sobrescreve o que já está preenchido.{" "}
+        <b>Geral:</b> refaz todos os títulos e sobrescreve capa, sinopse, nota, ano e gênero com o que o TMDB devolve
+        (gêneros Anime e Adulto são mantidos).
+      </p>
+      {confirm && (
+        <div class="mt-3 border border-warn/40 rounded p-3 text-xs">
+          <p class="mb-2">
+            A carga geral consulta o TMDB para <b>todos os {stats?.total ?? ""} títulos</b> e pode demorar bastante.
+            Dados já preenchidos serão sobrescritos. Continuar?
+          </p>
+          <div class="flex gap-2">
+            <button class="btn" onClick={() => start("full")}>Sim, fazer a carga geral</button>
+            <button class="btn" onClick={() => setConfirm(false)}>Cancelar</button>
+          </div>
+        </div>
+      )}
+      {err && <p class="mt-2 text-xs text-danger">{err}</p>}
+      {job && (
+        <div class="mt-3 text-xs" data-testid="tmdb-job">
+          <div class="text-muted mb-1">{job.mode === "full" ? "Carga geral" : "Carga complementar"}</div>
+          {job.status === "running" && (
+            <>
+              <p class="text-muted">
+                {job.phase || "Buscando no TMDB…"} {pct != null ? `${pct}% (${job.processed}/${job.total})` : ""}
+              </p>
+              {pct != null && (
+                <div class="h-1.5 rounded bg-black/30 mt-2 overflow-hidden">
+                  <div class="h-full bg-accent" style={{ width: `${pct}%` }} />
+                </div>
+              )}
+              <button class="btn mt-2" onClick={() => adminApi.cancelJob(job.id).catch(() => {})}>Cancelar carga</button>
+            </>
+          )}
+          {job.status === "error" && <p class="text-danger">Erro: {job.error || "?"}</p>}
+          {(job.status === "done" || job.status === "cancelled") && (
+            <p class={job.status === "done" ? "text-ok" : "text-warn"}>
+              {job.status === "done" ? "Concluído" : "Cancelado"}: {job.updated ?? 0} título(s) atualizado(s) de {job.processed} verificado(s)
+              {" "}({job.matched ?? 0} capa(s) nova(s), {job.genres ?? 0} gênero(s)
+              {job.not_found ? `, ${job.not_found} não encontrado(s) no TMDB` : ""}).
+            </p>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
