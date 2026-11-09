@@ -40,7 +40,7 @@ class Stream(Base):
 
     id = Column(Integer, primary_key=True)
     channel_id = Column(Integer, ForeignKey("channels.id", ondelete="CASCADE"), nullable=False)
-    url = Column(String(1000), nullable=False)
+    url = Column(String(4000), nullable=False)
     referrer = Column(String(500))
     user_agent = Column(String(500))
     quality = Column(String(20))
@@ -114,7 +114,7 @@ class VodItem(Base):
     season_number = Column(Integer)
     episode_number = Column(Integer)
     episode_title = Column(String(500))
-    stream_url = Column(String(1000))
+    stream_url = Column(String(4000))
     created_at = Column(DateTime, server_default=func.now())
 
     # espelham as colunas equivalentes de Stream (canais ao vivo) — o
@@ -138,7 +138,7 @@ class VodStream(Base):
 
     id = Column(Integer, primary_key=True)
     item_id = Column(Integer, ForeignKey("vod_items.id", ondelete="CASCADE"), nullable=False)
-    url = Column(String(1000), nullable=False)
+    url = Column(String(4000), nullable=False)
     is_healthy = Column(Boolean)
     consecutive_failures = Column(Integer, nullable=False, default=0)
     last_checked_at = Column(DateTime)

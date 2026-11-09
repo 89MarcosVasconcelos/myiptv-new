@@ -24,6 +24,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
 from . import job_registry
+from .input_safety import clean_header_value, clean_text, clean_url, public_error
 from .db import SessionLocal
 from .import_channels import _run_with_deadlock_retry
 from .safe_url import UnsafeUrlError, assert_public_http_url, safe_get
@@ -59,12 +60,13 @@ def parse_m3u(text: str) -> list[dict]:
             attrs = dict(_ATTR_RE.findall(line))
             name = line.rsplit(",", 1)[-1].strip() if "," in line else ""
             name = name or attrs.get("tvg-name", "").strip()
+            # tudo que vem da lista é higienizado antes de ir pro banco (input_safety.py)
             pending = {
-                "name": name,
-                "tvg_id": attrs.get("tvg-id", "").strip(),
-                "category": attrs.get("group-title", "").strip()[:50],
-                "logo_url": attrs.get("tvg-logo", "").strip(),
-                "language": attrs.get("tvg-language", "").strip(),
+                "name": clean_text(name, 255),
+                "tvg_id": clean_text(attrs.get("tvg-id", ""), 255),
+                "category": clean_text(attrs.get("group-title", ""), 50),
+                "logo_url": clean_url(attrs.get("tvg-logo", ""), 500),
+                "language": clean_text(attrs.get("tvg-language", ""), 40),
                 "referrer": "",
                 "user_agent": "",
             }
@@ -72,15 +74,16 @@ def parse_m3u(text: str) -> list[dict]:
             key, _, value = line[len("#EXTVLCOPT:"):].partition("=")
             key = key.strip().lower()
             if key == "http-user-agent":
-                pending["user_agent"] = value.strip()
+                pending["user_agent"] = clean_header_value(value)
             elif key in ("http-referrer", "http-referer"):
-                pending["referrer"] = value.strip()
+                pending["referrer"] = clean_header_value(value)
         elif line.startswith("#"):
             continue
         elif pending is not None:
-            if re.match(r"^https?://", line, re.IGNORECASE) and pending["name"]:
+            url = clean_url(line)  # só http(s) limpo; o resto (rtmp, javascript:, lixo) é descartado
+            if url and pending["name"]:
                 row = dict(pending)
-                row["stream_url"] = line
+                row["stream_url"] = url
                 row["tvg_id"] = row["tvg_id"] or _slug(row["name"])
                 rows.append(row)
             pending = None
@@ -253,14 +256,15 @@ def start_import_job(url: str | None = None, text: str | None = None, validate: 
             _set(job_id, status="done", phase=None, stats=stats)
             _notify(on_done, stats, None)
         except (UnsafeUrlError, ValueError) as e:
-            _set(job_id, status="error", phase=None, error=str(e))
-            _notify(on_done, None, str(e))
+            _set(job_id, status="error", phase=None, error=public_error(e))
+            _notify(on_done, None, public_error(e))
         except Exception as e:  # noqa: BLE001
+            # o detalhe completo (SQL, parâmetros) vai só pro log; na tela, mensagem segura
             logger.exception("Falha ao importar M3U")
             if db is not None:
                 db.rollback()
-            _set(job_id, status="error", phase=None, error=str(e))
-            _notify(on_done, None, str(e))
+            _set(job_id, status="error", phase=None, error=public_error(e))
+            _notify(on_done, None, public_error(e))
         finally:
             if db is not None:
                 db.close()

@@ -26,6 +26,7 @@ import requests
 
 from .config import TMDB_API_KEY
 from .db import SessionLocal
+from .input_safety import public_error
 from .job_registry import is_cancelled, register
 from .models import VodTitle
 from .title_clean import split_trailing_year
@@ -184,7 +185,8 @@ def fetch_details(tmdb_id: int, is_series: bool):
             r = _session().get(_TMDB_DETAIL.format(kind=kind, tmdb_id=int(tmdb_id)),
                                params={"api_key": TMDB_API_KEY, "language": "pt-BR"}, timeout=_TIMEOUT)
         except requests.RequestException as e:
-            last = f"não consegui falar com o TMDB: {e}"
+            # sem {e}: a mensagem da biblioteca traz a URL com a api_key e iria parar na tela
+            last = f"não consegui falar com o TMDB ({type(e).__name__})"
             time.sleep(1 + attempt)
             continue
         if r.status_code == 429:
@@ -338,7 +340,7 @@ def start_tmdb_job(mode: str = "incremental") -> str:
                 _set(job_id, status="done", phase="concluído", processed=len(rows))
         except Exception as e:
             db.rollback()
-            _set(job_id, status="error", error=str(e))
+            _set(job_id, status="error", error=public_error(e))
         finally:
             db.close()
 

@@ -38,6 +38,7 @@ from sqlalchemy.exc import OperationalError
 from . import languages
 from .channel_quality import is_junk_channel_name
 from .db import SessionLocal
+from .input_safety import clean_header_value, clean_text, clean_url
 from .models import Channel, Stream
 
 REQUIRED_COLUMNS = {"tvg_id", "stream_url"}
@@ -69,8 +70,12 @@ def _run_with_deadlock_retry(rows, db, on_progress=None) -> dict:
 def _clean(value):
     if value is None:
         return None
-    value = value.strip()
+    value = clean_text(value)  # sem NUL/controles (input_safety.py)
     return value or None
+
+
+# limite da coluna streams.url (migration 010)
+MAX_URL_LEN = 4000  # = input_safety.MAX_URL_LEN
 
 
 def _clip(value, size):
@@ -150,18 +155,24 @@ def _import_rows(rows: list[dict], db, on_progress=None) -> dict:
             on_progress(i - 1, total)
 
         tvg_id = _clean(row.get("tvg_id"))
-        stream_url = _clean(row.get("stream_url"))
+        # o link só entra se for http(s) limpo (sem javascript:/data:/file:, sem espaço ou
+        # quebra de linha no meio, no máximo 4000 caracteres) -- ver input_safety.py
+        stream_url = clean_url(row.get("stream_url"))
         if not tvg_id or not stream_url:
             stats["linhas_ignoradas"].append(i)
             continue
 
+        # nenhum campo pode estourar a coluna (um único valor longo derrubava a
+        # importação inteira com "Data too long"): corta o texto auxiliar
+        tvg_id = tvg_id[:255]
+
         tvg_key = tvg_id.lower()  # normaliza pra bater com a UNIQUE KEY case-insensitive do banco
         channel = channel_cache.get(tvg_key)
 
-        name = _clean(row.get("name"))
-        category = _clean(row.get("category"))
+        name = _clip(_clean(row.get("name")), 255)
+        category = _clip(_clean(row.get("category")), 50)
         language = _clean_language(row.get("language"))
-        logo_url = _clean(row.get("logo_url"))
+        logo_url = clean_url(row.get("logo_url"), 500) or None  # logo inválido = sem logo
         is_broadcast_tv = _clean_bool(row.get("is_broadcast_tv"))
 
         if channel is None:
@@ -202,11 +213,17 @@ def _import_rows(rows: list[dict], db, on_progress=None) -> dict:
                 stats["canais_atualizados"] += 1
 
         channel_streams = streams_cache.setdefault(tvg_key, {})
+        # a UNIQUE KEY (channel_id, url(255)) compara só os 255 primeiros caracteres
+        # (e sem diferenciar maiúscula): dois links do mesmo canal que só diferem
+        # depois disso bateriam na constraint e derrubariam a importação
+        prefix = stream_url[:255].lower()
+        if stream_url not in channel_streams and any(u[:255].lower() == prefix for u in channel_streams):
+            continue
         if stream_url not in channel_streams:
             stream = Stream(
                 url=stream_url,
-                referrer=_clip(_clean(row.get("referrer")), 500),
-                user_agent=_clip(_clean(row.get("user_agent")), 500),
+                referrer=clean_header_value(row.get("referrer")) or None,
+                user_agent=clean_header_value(row.get("user_agent")) or None,
             )
             if row.get("_state") == "ok":  # validado agora pelo import M3U
                 stream.is_healthy = True

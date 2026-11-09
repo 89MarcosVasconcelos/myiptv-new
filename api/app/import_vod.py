@@ -48,6 +48,7 @@ from sqlalchemy.orm import joinedload
 from . import languages
 from .title_clean import split_trailing_year
 from .db import SessionLocal
+from .input_safety import clean_block, clean_text, clean_url
 from .models import VodItem, VodTitle
 from .vod_mirrors import upsert_mirror
 
@@ -100,7 +101,7 @@ def _clean(value):
     """CSV sempre devolve string; normaliza célula vazia pra None."""
     if value is None:
         return None
-    value = value.strip()
+    value = clean_text(value)  # sem NUL/controles/quebras (input_safety.py)
     return value or None
 
 
@@ -212,8 +213,8 @@ def _import_rows(rows: list[dict], db, on_progress=None) -> dict:
         key = (vod_type, title_name)
         vod_title = title_cache.get(key)
 
-        description = _clean(row.get("description"))
-        poster_url = _clean(row.get("poster_url"))
+        description = clean_block(row.get("description")) or None
+        poster_url = clean_url(row.get("poster_url"), 500) or None  # só http(s) limpo
         genre = _clean(row.get("genre"))
         language = _clean_language(row.get("language"))
         year = _clean_int(row.get("year"))
@@ -250,7 +251,7 @@ def _import_rows(rows: list[dict], db, on_progress=None) -> dict:
         season = _clean_int(row.get("season_number"))
         episode = _clean_int(row.get("episode_number"))
         episode_title = _clean(row.get("episode_title"))
-        stream_url = _clean(row.get("stream_url"))
+        stream_url = clean_url(row.get("stream_url")) or None  # só http(s) limpo
 
         item_key = (season, episode)
         title_items = items_cache.setdefault(key, {})

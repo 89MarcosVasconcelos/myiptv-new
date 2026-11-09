@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from sqlalchemy import func
 
 from .db import SessionLocal
+from .input_safety import public_error
 from .job_registry import is_cancelled, register
 from .models import Channel, Stream
 from .stream_validation import INCONCLUSIVO, MORTO, OK, check_stream
@@ -120,7 +121,7 @@ def start_validation_job() -> str:
             _set(job_id, status="done", phase=None, processed=total, ok=ok, dead=dead, unknown=unknown)
         except Exception as e:  # noqa: BLE001
             db.rollback()
-            _set(job_id, status="error", error=str(e))
+            _set(job_id, status="error", error=public_error(e))
         finally:
             db.close()
 
