@@ -31,7 +31,7 @@ from .stream_validation import INCONCLUSIVO, MORTO, OK, check_stream
 
 logger = logging.getLogger("iptv-api.import-m3u")
 
-MAX_ENTRIES = 20_000
+MAX_ENTRIES = 22_000
 MAX_DOWNLOAD_BYTES = 40 * 1024 * 1024
 VALIDATE_TIMEOUT_SEC = 8
 VALIDATE_MAX_WORKERS = 15
@@ -136,6 +136,8 @@ def _check_row(row: dict, validate: bool) -> str:
     return check_stream(row["stream_url"], VALIDATE_TIMEOUT_SEC, headers)
 
 
+ADULT_CATEGORY = "Adulto"  # mesmo valor de routers/channels.py:ADULT_CATEGORY
+
 _ADULT_RE = re.compile(
     r"\b(xxx|adult|adulto|adultos|porn|porno|pornô|playboy|hentai|erotic|erótic\w*|nsfw|sexy)\b",
     re.IGNORECASE,
@@ -187,6 +189,14 @@ def start_import_job(url: str | None = None, text: str | None = None, validate: 
                     seen.add(key)
                     unique.append(r)
             rows = unique
+
+            # canal adulto importado vai SEMPRE pra categoria "Adulto" -- é ela que fica
+            # atrás da permissão da conta + senha (routers/channels.py, adult_gate.py).
+            # Sem isso, uma categoria crua ("XXX", "For Adults"...) apareceria pra todos.
+            if not skip_adult:
+                for r in rows:
+                    if is_adult_row(r):
+                        r["category"] = ADULT_CATEGORY
 
             adultos = 0
             if skip_adult:

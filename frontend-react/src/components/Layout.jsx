@@ -1,6 +1,6 @@
 import { useState, useEffect } from "preact/hooks";
 import { Link, useLocation, navigate } from "../lib/router.jsx";
-import { adminApi } from "../lib/api.js";
+import { adminApi, api, setAdultPin, hasAdultPin } from "../lib/api.js";
 
 // Layout do projeto MPIPTV (herdado do front Laravel/Vue anterior): sidebar
 // fixa de 16rem com seções, cabeçalho "sticky" translúcido com o título da
@@ -91,9 +91,94 @@ export function Brand({ big = false }) {
   );
 }
 
+// Cadeado do conteúdo adulto: só aparece pra conta que o admin liberou. A senha
+// fica apenas na memória da aba -- recarregar a página bloqueia de novo.
+function AdultLock({ onChange }) {
+  const [allowed, setAllowed] = useState(false);
+  const [open, setOpen] = useState(false);
+  const [pin, setPin] = useState("");
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const unlocked = hasAdultPin();
+
+  useEffect(() => {
+    let alive = true;
+    api.adultStatus().then((s) => alive && setAllowed(!!s.allowed)).catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  if (!allowed) return null;
+
+  async function submit(e) {
+    e.preventDefault();
+    setErr("");
+    setBusy(true);
+    try {
+      await api.adultUnlock(pin);
+      setAdultPin(pin);
+      setPin("");
+      setOpen(false);
+      onChange();
+    } catch (e2) {
+      setErr(e2.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function lock() {
+    setAdultPin(null);
+    onChange();
+  }
+
+  return (
+    <div class="relative ml-auto">
+      {unlocked ? (
+        <button type="button" class="chip active" onClick={lock} title="Bloquear de novo">
+          🔓 Adulto liberado · Bloquear
+        </button>
+      ) : (
+        <button type="button" class="chip" onClick={() => setOpen(true)}>
+          🔒 Adulto
+        </button>
+      )}
+      {open && (
+        <div class="fixed inset-0 z-50 grid place-items-center bg-black/60 px-4" onClick={() => setOpen(false)}>
+          <form class="panel w-full max-w-xs p-5" onClick={(e) => e.stopPropagation()} onSubmit={submit}>
+            <p class="mb-3 text-sm font-semibold">Conteúdo adulto</p>
+            <input
+              class="input w-full"
+              type="password"
+              inputMode="numeric"
+              autoComplete="off"
+              autoFocus
+              placeholder="Senha"
+              value={pin}
+              onInput={(e) => setPin(e.currentTarget.value)}
+              data-testid="adult-pin"
+            />
+            {err && <p class="mt-2 text-xs text-danger">{err}</p>}
+            <div class="mt-3 flex gap-2">
+              <button class="btn" type="submit" disabled={busy || !pin}>
+                Liberar
+              </button>
+              <button class="btn-ghost" type="button" onClick={() => setOpen(false)}>
+                Cancelar
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function Layout({ isAdmin, username, role, contentTypes, onLogout, children }) {
   const { path } = useLocation();
   const [open, setOpen] = useState(false);
+  const [adultKey, setAdultKey] = useState(0); // muda ao liberar/bloquear: refaz as listagens
 
   // fecha a gaveta sempre que a rota muda (mobile)
   useEffect(() => setOpen(false), [path]);
@@ -167,8 +252,9 @@ export function Layout({ isAdmin, username, role, contentTypes, onLogout, childr
             </svg>
           </button>
           <h1 class="text-base font-semibold text-text md:text-lg">{titleFor(path)}</h1>
+          <AdultLock onChange={() => setAdultKey((k) => k + 1)} />
         </header>
-        <main class="min-h-[calc(100vh-3.25rem)]">{children}</main>
+        <main key={adultKey} class="min-h-[calc(100vh-3.25rem)]">{children}</main>
       </div>
     </div>
   );

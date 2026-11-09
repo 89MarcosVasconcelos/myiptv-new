@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, joinedload
 
-from .. import languages
+from .. import adult_gate, languages
 from ..db import get_db
 from ..categories_pt import category_label
 from ..epg import now_playing_map, upcoming_programs
@@ -35,7 +35,9 @@ class FailureReport(BaseModel):
 
 
 def _hide_adult(access: AccessToken) -> bool:
-    return not (access and access.sees_adult_content)
+    # adulto só com a permissão da conta E a senha (X-Adult-Pin) conferida nesta
+    # requisição -- ver adult_gate.py
+    return not (access and access.sees_adult_content and getattr(access, "adult_unlocked", False))
 
 
 def _visible_channels_query(db: Session, hide_adult: bool = True):
@@ -112,6 +114,29 @@ def _category_counts(db: Session, hide_adult: bool = True):
     if none_n:
         named.append((CATEGORY_NONE, none_n))
     return named
+
+
+class AdultUnlock(BaseModel):
+    pin: str
+
+
+@router.get("/p/{token}/adult/status")
+def adult_status(_access: AccessToken = Depends(require_valid_token)):
+    """O front usa pra decidir se mostra o botão do cadeado (só contas com permissão)."""
+    return {"allowed": bool(_access.sees_adult_content), "unlocked": bool(_access.adult_unlocked)}
+
+
+@router.post("/p/{token}/adult/unlock")
+def adult_unlock(body: AdultUnlock, token: str, _access: AccessToken = Depends(require_valid_token)):
+    """Confere a senha do conteúdo adulto. O front guarda a senha só na memória da aba
+    e a manda no cabeçalho X-Adult-Pin; aqui só dizemos se está certa."""
+    if not _access.sees_adult_content:
+        raise HTTPException(403, "esta conta não tem permissão para conteúdo adulto")
+    if adult_gate.is_locked(token):
+        raise HTTPException(429, "muitas tentativas erradas; aguarde alguns minutos")
+    if not adult_gate.verify(body.pin, token):
+        raise HTTPException(403, "senha incorreta")
+    return {"ok": True}
 
 
 @router.get("/p/{token}/channels.json")

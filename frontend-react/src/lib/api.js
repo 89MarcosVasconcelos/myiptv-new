@@ -9,8 +9,20 @@ export function getToken() {
   return _token;
 }
 
+// senha do conteúdo adulto: fica SÓ na memória da aba (recarregar a página apaga,
+// então ela é pedida de novo toda vez). O servidor confere em cada requisição.
+let _adultPin = null;
+export function setAdultPin(p) {
+  _adultPin = p || null;
+}
+export function hasAdultPin() {
+  return !!_adultPin;
+}
+
 async function req(path, opts = {}) {
-  const resp = await fetch(BASE + path, { credentials: "include", ...opts });
+  const headers = { ...(opts.headers || {}) };
+  if (_adultPin) headers["X-Adult-Pin"] = _adultPin;
+  const resp = await fetch(BASE + path, { credentials: "include", ...opts, headers });
   if (!resp.ok) {
     const body = await resp.json().catch(() => ({}));
     const err = new Error(body.detail || `HTTP ${resp.status}`);
@@ -22,6 +34,13 @@ async function req(path, opts = {}) {
 
 // --- público (precisa de token no path) ---
 export const api = {
+  adultStatus: () => req(`p/${encodeURIComponent(_token)}/adult/status`),
+  adultUnlock: (pin) =>
+    req(`p/${encodeURIComponent(_token)}/adult/unlock`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pin }),
+    }),
   channels: (params = {}) =>
     req(`p/${encodeURIComponent(_token)}/channels.json?${new URLSearchParams(params)}`),
   channelCategories: () => req(`p/${encodeURIComponent(_token)}/channels/categories`),

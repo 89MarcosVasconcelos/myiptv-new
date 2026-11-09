@@ -38,7 +38,9 @@ ADULT_GENRE = "Adulto"
 
 
 def _hide_adult(access: AccessToken) -> bool:
-    return not (access and access.sees_adult_content)
+    # adulto só com a permissão da conta E a senha (X-Adult-Pin) conferida nesta
+    # requisição -- ver adult_gate.py
+    return not (access and access.sees_adult_content and getattr(access, "adult_unlocked", False))
 
 # ordem alfabética ignorando símbolos no começo ("¡Viva!", "...E o Vento",
 # "(A) Fronteira", "#Natal"): sem isso o MySQL põe todos os títulos que

@@ -25,7 +25,7 @@ function summaryText(s) {
 // Página só do admin (a rota já é protegida no App e no servidor).
 export function AdminFontes() {
   const [data, setData] = useState(null);
-  const [opts, setOpts] = useState({ validate_links: true, skip_adult: true });
+  const [opts, setOpts] = useState({ validate_links: true, skip_adult: false });
   const [job, setJob] = useState(null); // {id, label, status, phase, processed, total, stats, error}
   const [err, setErr] = useState("");
   const timer = useRef(null);

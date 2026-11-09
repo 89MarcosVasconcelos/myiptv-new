@@ -52,3 +52,7 @@ TMDB_API_KEY = os.environ.get("TMDB_API_KEY", "")
 # página "Importar fontes". Sem ele, a busca de código fica desligada (a API do
 # GitHub exige login pra isso); a varredura de um repositório funciona mesmo assim.
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
+
+# senha (PIN) pedida pra desbloquear o conteúdo adulto. Padrão "0000"; pra trocar,
+# defina ADULT_PIN no Coolify e faça Redeploy. Ver api/app/adult_gate.py.
+ADULT_PIN = os.environ.get("ADULT_PIN") or "0000"
