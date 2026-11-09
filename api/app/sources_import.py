@@ -23,6 +23,21 @@ from .models import ImportSource
 
 IPTV_ORG = "https://iptv-org.github.io/iptv"
 FREE_TV_URL = "https://raw.githubusercontent.com/Free-TV/IPTV/master/playlist.m3u8"
+FREE_TV_BASE = "https://raw.githubusercontent.com/Free-TV/IPTV/master/playlists"
+
+# listas por país do Free-TV (playlist_<slug>.m3u8) -- só as que existem no repositório
+FREE_TV_COUNTRIES = [
+    ("japan", "Japão (inclui canais de anime)"), ("korea", "Coreia do Sul"), ("china", "China"),
+    ("taiwan", "Taiwan"), ("india", "Índia"), ("indonesia", "Indonésia"),
+    ("brazil", "Brasil"), ("portugal", "Portugal"), ("usa", "Estados Unidos"), ("canada", "Canadá"),
+    ("mexico", "México"), ("argentina", "Argentina"), ("chile", "Chile"), ("peru", "Peru"),
+    ("paraguay", "Paraguai"), ("venezuela", "Venezuela"), ("spain", "Espanha"), ("france", "França"),
+    ("italy", "Itália"), ("germany", "Alemanha"), ("uk", "Reino Unido"), ("ireland", "Irlanda"),
+    ("netherlands", "Holanda"), ("belgium", "Bélgica"), ("austria", "Áustria"), ("switzerland", "Suíça"),
+    ("sweden", "Suécia"), ("norway", "Noruega"), ("denmark", "Dinamarca"), ("poland", "Polônia"),
+    ("russia", "Rússia"), ("ukraine", "Ucrânia"), ("turkey", "Turquia"), ("greece", "Grécia"),
+    ("israel", "Israel"), ("australia", "Austrália"),
+]
 
 # códigos ISO-3166 (país), categorias e idiomas ISO-639-3 que valem a pena expor.
 # A lista completa do iptv-org é bem maior; quem quiser outra usa "URL própria".
@@ -61,8 +76,10 @@ def presets() -> dict:
         },
         "free_tv": {
             "title": "Free-TV (só canais legais e gratuitos)",
-            "note": "Lista curada com TV aberta e canais oficiais gratuitos de vários países.",
+            "note": "Lista curada com TV aberta e canais oficiais gratuitos. Importe tudo de uma vez ou só o país que quiser.",
             "url": FREE_TV_URL,
+            "countries": [{"code": c, "name": n, "url": f"{FREE_TV_BASE}/playlist_{c}.m3u8"}
+                          for c, n in FREE_TV_COUNTRIES],
         },
     }
 

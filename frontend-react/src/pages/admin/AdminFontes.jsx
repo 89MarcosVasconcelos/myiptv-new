@@ -156,10 +156,18 @@ function Presets({ presets, onSync, disabled }) {
       <div>
         <div class="text-sm font-semibold">{presets.free_tv.title}</div>
         <p class="text-xs text-muted mb-2">{presets.free_tv.note}</p>
-        <button type="button" class="btn" disabled={disabled}
-          onClick={() => onSync("Free-TV", presets.free_tv.url)}>
-          Importar Free-TV ⬇
-        </button>
+        <div class="flex flex-wrap gap-2">
+          <button type="button" class="btn" disabled={disabled}
+            onClick={() => onSync("Free-TV", presets.free_tv.url)}>
+            Todos os países ⬇
+          </button>
+          {(presets.free_tv.countries || []).map((i) => (
+            <button type="button" class="btn" disabled={disabled}
+              onClick={() => onSync(`Free-TV · ${i.name}`, i.url)}>
+              {i.name} ⬇
+            </button>
+          ))}
+        </div>
       </div>
     </Panel>
   );

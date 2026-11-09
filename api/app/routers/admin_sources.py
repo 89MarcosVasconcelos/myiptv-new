@@ -21,6 +21,7 @@ router = APIRouter(prefix="/admin")
 def _preset_urls() -> set[str]:
     p = sources_import.presets()
     urls = {p["free_tv"]["url"]}
+    urls.update(i["url"] for i in p["free_tv"]["countries"])
     for g in p["iptv_org"]["groups"]:
         urls.update(i["url"] for i in g["items"])
     return urls
