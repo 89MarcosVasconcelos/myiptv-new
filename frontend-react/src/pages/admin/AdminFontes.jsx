@@ -90,6 +90,7 @@ export function AdminFontes() {
 
       <Presets presets={data.presets} onSync={syncPreset} disabled={running} />
       <MySources data={data} onChange={load} onSync={syncSaved} running={running} setErr={setErr} />
+      <ValidateSources />
       <GitHubDiscover data={data} onAdded={load} sources={data.sources} />
       <TmdbTools configured={data.tmdb_configured} />
     </div>
@@ -490,5 +491,163 @@ function TmdbLoad({ configured }) {
         </div>
       )}
     </div>
+  );
+}
+
+// valida a efetividade dos links de canais cadastrados; os mortos entram numa
+// lista de exclusão (um por um ou todos de uma vez)
+function ValidateSources() {
+  const [job, setJob] = useState(null);
+  const [err, setErr] = useState("");
+  const [list, setList] = useState({ count: 0, items: [] });
+  const [q, setQ] = useState("");
+  const [confirmAll, setConfirmAll] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [loading, setLoading] = useState(false);
+  const timer = useRef(null);
+  const PAGE = 50;
+
+  async function load(reset = true, query = q) {
+    setLoading(true);
+    try {
+      const offset = reset ? 0 : list.items.length;
+      const r = await adminApi.brokenStreams({ limit: PAGE, offset, ...(query.trim() ? { q: query.trim() } : {}) });
+      setList((cur) => ({ count: r.count, items: reset ? r.items : [...cur.items, ...r.items] }));
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+  useEffect(() => {
+    load(true, "");
+    return () => clearTimeout(timer.current);
+  }, []);
+
+  const running = job?.status === "running";
+
+  async function poll(id) {
+    try {
+      const j = await adminApi.validateStreamsStatus(id);
+      setJob({ ...j, id });
+      if (j.status === "running") timer.current = setTimeout(() => poll(id), 1000);
+      else load(true);
+    } catch (e) {
+      setErr(e.message);
+    }
+  }
+  async function start() {
+    setErr("");
+    setMsg("");
+    setConfirmAll(false);
+    try {
+      const { job_id } = await adminApi.validateStreams();
+      setJob({ id: job_id, status: "running", processed: 0, total: 0, ok: 0, dead: 0, unknown: 0 });
+      poll(job_id);
+    } catch (e) {
+      setErr(e.message);
+    }
+  }
+  async function removeOne(item) {
+    setErr("");
+    try {
+      const r = await adminApi.deleteBroken(item.id);
+      setList((cur) => ({ count: Math.max(0, cur.count - 1), items: cur.items.filter((i) => i.id !== item.id) }));
+      setMsg(`Excluído: ${item.channel_name}${r.channels ? " (canal removido por ficar sem links)" : ""}.`);
+    } catch (e) {
+      setErr(e.message);
+      load(true);
+    }
+  }
+  async function removeAll() {
+    setErr("");
+    setConfirmAll(false);
+    try {
+      const r = await adminApi.deleteAllBroken();
+      setMsg(`${r.links} link(s) excluído(s) e ${r.channels} canal(is) sem links removido(s).`);
+      load(true);
+    } catch (e) {
+      setErr(e.message);
+    }
+  }
+
+  const pct = job?.total ? Math.round((job.processed / job.total) * 100) : null;
+  const age = (sec) => (sec == null ? "nunca testado" : sec < 3600 ? `${Math.round(sec / 60)} min atrás` : sec < 86400 ? `${Math.round(sec / 3600)} h atrás` : `${Math.round(sec / 86400)} d atrás`);
+
+  return (
+    <Panel title="Validar fontes">
+      <p class="text-xs text-muted mb-3">
+        Testa todos os links dos canais cadastrados. Os que estão mortos (404/410 ou servidor que não existe mais) vão
+        para a lista abaixo para você excluir. Links que só deram bloqueio ou demora ficam como desconhecidos e não entram na lista.
+      </p>
+      <div class="flex items-center gap-2">
+        <button class="btn" disabled={running} onClick={start}>{running ? "Validando…" : "Validar fontes"}</button>
+        {running && <button class="btn" onClick={() => adminApi.cancelJob(job.id).catch(() => {})}>Cancelar</button>}
+      </div>
+      {err && <p class="mt-2 text-xs text-danger">{err}</p>}
+      {job && (
+        <div class="mt-3 text-xs" data-testid="validate-job">
+          {running && (
+            <>
+              <p class="text-muted">
+                Validando links… {pct != null ? `${pct}% (${job.processed}/${job.total})` : ""} — {job.ok} ok · {job.dead} mortos · {job.unknown} desconhecidos
+              </p>
+              <div class="h-2 rounded bg-black/30 mt-2 overflow-hidden">
+                <div class="h-full bg-gradient-to-r from-accent2 to-accent transition-[width]" style={{ width: `${pct || 0}%` }} />
+              </div>
+            </>
+          )}
+          {job.status === "error" && <p class="text-danger">Erro: {job.error || "?"}</p>}
+          {job.status === "cancelled" && <p class="text-warn">Validação cancelada em {job.processed} de {job.total}.</p>}
+          {job.status === "done" && (
+            <p class="text-ok">
+              Concluído: {job.total} link(s) testado(s) — {job.ok} ok, {job.dead} morto(s), {job.unknown} desconhecido(s).
+            </p>
+          )}
+        </div>
+      )}
+
+      <div class="mt-5" data-testid="broken-list">
+        <div class="flex items-center gap-2 flex-wrap mb-2">
+          <div class="text-[12px] uppercase tracking-wide text-muted flex-1">Links com problema ({list.count})</div>
+          <input class={inp + " !w-48"} placeholder="Filtrar por canal ou link" value={q}
+            onInput={(e) => setQ(e.currentTarget.value)}
+            onKeyDown={(e) => e.key === "Enter" && load(true, e.currentTarget.value)} />
+          <button class="btn" disabled={list.count === 0 || running} onClick={() => setConfirmAll(true)}>
+            Excluir todos ({list.count})
+          </button>
+        </div>
+        {confirmAll && (
+          <div class="mb-3 border border-warn/40 rounded p-3 text-xs">
+            <p class="mb-2">
+              Excluir <b>{list.count} link(s)</b> mortos de uma vez? Canais que ficarem sem nenhum link também serão removidos. Não dá para desfazer.
+            </p>
+            <div class="flex gap-2">
+              <button class="btn" onClick={removeAll}>Sim, excluir todos</button>
+              <button class="btn" onClick={() => setConfirmAll(false)}>Cancelar</button>
+            </div>
+          </div>
+        )}
+        {msg && <p class="mb-2 text-xs text-ok">{msg}</p>}
+        {list.items.length === 0 && !loading && (
+          <p class="text-xs text-muted">Nenhum link com problema. Rode a validação para conferir.</p>
+        )}
+        <ul class="space-y-1 max-h-96 overflow-y-auto thin-scroll">
+          {list.items.map((i) => (
+            <li class="text-xs flex items-center gap-2 border border-white/5 rounded px-2 py-1.5" data-testid="broken-row">
+              <div class="flex-1 min-w-0">
+                <div class="font-semibold truncate">{i.channel_name}</div>
+                <div class="text-muted truncate" title={i.url}>{i.url}</div>
+                <div class="text-muted">{i.failures} falha(s) · testado {age(i.checked_age_seconds)}</div>
+              </div>
+              <button class="btn" disabled={running} onClick={() => removeOne(i)}>Excluir</button>
+            </li>
+          ))}
+        </ul>
+        {list.items.length < list.count && (
+          <button class="btn mt-2" disabled={loading} onClick={() => load(false)}>Carregar mais</button>
+        )}
+      </div>
+    </Panel>
   );
 }

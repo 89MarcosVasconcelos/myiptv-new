@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from ..auth_admin import require_admin
 from ..db import get_db
-from .. import poster_fetch, sources_import
+from .. import poster_fetch, sources_import, stream_cleanup
 from ..models import AdminUser, ImportSource, VodTitle
 from ..safe_url import UnsafeUrlError, assert_public_http_url
 from ..sources_import import GitHubError
@@ -196,3 +196,38 @@ def tmdb_apply(title_id: int, body: TmdbApply, db: Session = Depends(get_db),
     db.commit()
     return {"ok": True, "title": {"id": t.id, "poster_url": t.poster_url, "year": t.year,
                                   "genre": t.genre, "rating": t.rating}}
+
+
+# --- Validar fontes: testa os links dos canais e lista os mortos pra exclusão ---
+
+@router.post("/sources/validate")
+def validate_streams(_admin: AdminUser = Depends(require_admin)):
+    return {"job_id": stream_cleanup.start_validation_job()}
+
+
+@router.get("/sources/validate/{job_id}/status")
+def validate_streams_status(job_id: str, _admin: AdminUser = Depends(require_admin)):
+    job = stream_cleanup.get_validation_job(job_id)
+    if job is None:
+        raise HTTPException(404, "Job não encontrado (ou o container reiniciou)")
+    return job
+
+
+@router.get("/sources/broken")
+def list_broken_streams(q: Optional[str] = None, limit: int = 50, offset: int = 0,
+                        db: Session = Depends(get_db), _admin: AdminUser = Depends(require_admin)):
+    return stream_cleanup.list_broken(db, q, max(1, min(limit, 200)), max(0, offset))
+
+
+@router.post("/sources/broken/delete-all")
+def delete_all_broken(db: Session = Depends(get_db), _admin: AdminUser = Depends(require_admin)):
+    """Exclui todos os links marcados como mortos (e canais que ficarem sem link)."""
+    return stream_cleanup.delete_all(db)
+
+
+@router.delete("/sources/broken/{stream_id}")
+def delete_one_broken(stream_id: int, db: Session = Depends(get_db), _admin: AdminUser = Depends(require_admin)):
+    r = stream_cleanup.delete_one(db, stream_id)
+    if r is None:
+        raise HTTPException(404, "Esse link não está mais na lista de problemas")
+    return r
