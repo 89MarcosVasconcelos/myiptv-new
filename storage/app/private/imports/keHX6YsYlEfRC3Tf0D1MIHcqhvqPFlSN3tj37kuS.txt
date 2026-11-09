@@ -1,0 +1,2 @@
+url;nome;pais;modo;tipo;genero;idioma;legenda
+http://exemplo.test/teste-migracao.m3u8;Teste Migracao Import Path;;;;;;
