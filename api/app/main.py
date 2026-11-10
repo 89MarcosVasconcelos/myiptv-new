@@ -17,7 +17,7 @@ from .routers import admin, admin_sources, channels, health, hls_proxy, media_pr
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("iptv-api")
 
-app = FastAPI(title="MPTV API")
+app = FastAPI(title="MPIPTV API")
 
 # CORS liberado pra facilitar o teste local do frontend. Restringir antes de expor
 # publicamente (ver ARQUITETURA.md secao 9).
@@ -40,6 +40,14 @@ app.include_router(admin_sources.router)
 
 @app.on_event("startup")
 def on_startup():
+    # cada espectador passando pelo proxy de vídeo ocupa uma thread enquanto o
+    # stream roda; o padrão do anyio (40) esgotaria com poucos espectadores
+    try:
+        import anyio.to_thread
+
+        anyio.to_thread.current_default_thread_limiter().total_tokens = 200
+    except Exception:  # noqa: BLE001 - só otimização, nunca impede a subida
+        pass
     wait_for_db(engine)
     run_migrations(engine, final=False)
     Base.metadata.create_all(bind=engine)

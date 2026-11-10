@@ -1,20 +1,25 @@
-"""Proxy leve de MANIFESTO HLS. Alguns provedores (Pluto TV) servem o .m3u8
-com CORS restrito (`access-control-allow-origin: http://pluto.tv`), então o
-hls.js no navegador não consegue buscar. Os segmentos (.ts) e chaves (.key)
-desses mesmos provedores liberam `*` — então só o manifesto precisa passar
-por aqui (poucos KB por sessão); o vídeo pesado vai direto do CDN.
+"""Proxy de MANIFESTO HLS. Alguns provedores (Pluto TV) servem o .m3u8 com CORS
+restrito (`access-control-allow-origin: http://pluto.tv`), então o hls.js no
+navegador não consegue buscar o manifesto direto.
 
-Reescreve as URIs de sub-playlist (.m3u8) pra voltarem por este proxy e
-deixa .ts/.key absolutos e diretos.
+Modo padrão: só o manifesto passa por aqui (poucos KB por sessão) e os
+segmentos https vão direto do CDN. Segmentos/chaves http:// (mixed content na
+página https) já voltam pelo /media do servidor automaticamente.
+Modo `full=1`: TUDO (segmentos, chaves, init) volta pelo servidor -- usado
+quando o provedor https também não libera CORS nos segmentos.
+
+`ref`/`ua`: Referer e User-Agent do link (cadastrados no canal), repassados ao
+provedor e propagados pra todas as URLs reescritas. Ver proxy_rewrite.py.
 """
 
-import re
-from urllib.parse import quote, urljoin
+from urllib.parse import urlsplit
 
 import requests
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 from ..db import get_db
+from ..input_safety import clean_header_value
+from ..proxy_rewrite import rewrite_manifest
 from ..models import AccessToken
 from ..safe_url import UnsafeUrlError, safe_get
 from ..security import require_valid_token
@@ -30,20 +35,28 @@ _UA = "Mozilla/5.0 (SmartTV) AppleWebKit/537.36"
 def hls_proxy(
     token: str,
     url: str = Query(..., description="URL do manifesto (encoded)"),
+    ref: str | None = Query(None, description="Referer a enviar ao provedor"),
+    ua: str | None = Query(None, description="User-Agent a enviar ao provedor"),
+    full: int = Query(0, description="1 = segmentos e chaves também voltam pelo servidor"),
     _access: AccessToken = Depends(require_valid_token),
     db=Depends(get_db),
 ):
     if not url.startswith(("http://", "https://")):
         raise HTTPException(status_code=400, detail="url inválida")
 
+    ref = clean_header_value(ref, 500) if ref else None
+    ua = clean_header_value(ua, 500) if ua else None
+    headers = {"User-Agent": ua or _UA}
+    # sem Referer configurado no link, mantém o comportamento antigo só pro Pluto
+    referer = ref or ("http://pluto.tv/" if "pluto.tv" in (urlsplit(url).hostname or "") else None)
+    if referer:
+        headers["Referer"] = referer
+        parts = urlsplit(referer)
+        if parts.scheme and parts.netloc:
+            headers["Origin"] = f"{parts.scheme}://{parts.netloc}"
     try:
         # safe_get: bloqueia SSRF (hosts internos) em cada redirect
-        r = safe_get(
-            url,
-            headers={"User-Agent": _UA, "Referer": "http://pluto.tv/", "Origin": "http://pluto.tv"},
-            timeout=_TIMEOUT,
-            stream=True,
-        )
+        r = safe_get(url, headers=headers, timeout=_TIMEOUT, stream=True)
     except UnsafeUrlError as e:
         raise HTTPException(status_code=400, detail=f"url não permitida: {e}")
     except requests.RequestException:
@@ -63,24 +76,7 @@ def hls_proxy(
             headers={"Access-Control-Allow-Origin": "*", "Cache-Control": "no-store"},
         )
 
-    prefix = f"/p/{quote(token, safe='')}/hls?url="
-
-    def fix_line(line: str) -> str:
-        s = line.strip()
-        if not s or s.startswith("#"):
-            # reescreve URI="..." dentro de #EXT-X-MEDIA (sub-playlists de áudio/legenda)
-            def repl(m):
-                abs_u = urljoin(final_url, m.group(1))
-                if ".m3u8" in abs_u:
-                    return f'URI="{prefix}{quote(abs_u, safe="")}"'
-                return m.group(0)
-            return re.sub(r'URI="([^"]+)"', repl, line)
-        abs_u = urljoin(final_url, s)
-        if ".m3u8" in abs_u:  # variante -> volta pelo proxy
-            return prefix + quote(abs_u, safe="")
-        return abs_u  # .ts / .key / outro -> absoluto e direto
-
-    rewritten = "\n".join(fix_line(ln) for ln in text.splitlines()) + "\n"
+    rewritten = rewrite_manifest(text, final_url, token, ref=ref, ua=ua, full=bool(full))
     return Response(
         content=rewritten,
         media_type="application/vnd.apple.mpegurl",

@@ -365,7 +365,12 @@ def resolve_channel(
             status_code=503,
             detail=f"Todos os links desse canal{suffix} estão fora do ar no momento. Tente de novo mais tarde.",
         )
-    return {"tvg_id": tvg_id, "url": playable[0].url, "checked_mirrors": len(playable), "lang": lang}
+    best = playable[0]
+    return {
+        "tvg_id": tvg_id, "url": best.url, "checked_mirrors": len(playable), "lang": lang,
+        # o player repassa esses dois ao proxy (/hls e /media) pra o provedor ver o mesmo cabeçalho
+        "referrer": best.referrer, "user_agent": best.user_agent,
+    }
 
 
 @router.get("/p/{token}/channels/{tvg_id}/epg")

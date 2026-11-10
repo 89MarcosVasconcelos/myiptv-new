@@ -6,7 +6,7 @@ import { attachHls, detachHls } from "../lib/hls.js";
 // - startAt: segundos pra retomar a reprodução
 // - onTime(position, duration): chamado ~a cada 10s enquanto toca
 // - onEnded(): fim do vídeo
-export function VideoBox({ url, onFatal, onTime, onEnded, startAt, class: cls }) {
+export function VideoBox({ url, meta, onFatal, onTime, onEnded, startAt, class: cls }) {
   const ref = useRef(null);
   const lastReport = useRef(0);
   const seeked = useRef(false);
@@ -16,7 +16,7 @@ export function VideoBox({ url, onFatal, onTime, onEnded, startAt, class: cls })
     if (!v || !url) return;
     seeked.current = false;
     lastReport.current = 0;
-    attachHls(v, url, onFatal);
+    attachHls(v, url, onFatal, meta);
     v.play?.().catch(() => {});
     return () => detachHls(v);
   }, [url]);

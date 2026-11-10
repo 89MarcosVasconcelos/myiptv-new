@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from ..db import get_db
+from ..input_safety import clean_header_value
 from ..models import AccessToken
 from ..safe_url import UnsafeUrlError, safe_get
 from ..security import require_valid_token
@@ -34,13 +35,19 @@ def media_proxy(
     token: str,
     request: Request,
     url: str = Query(..., description="URL do arquivo de mídia (encoded)"),
+    ref: str | None = Query(None, description="Referer a enviar ao provedor"),
+    ua: str | None = Query(None, description="User-Agent a enviar ao provedor"),
     _access: AccessToken = Depends(require_valid_token),
     db=Depends(get_db),
 ):
     if not url.startswith(("http://", "https://")):
         raise HTTPException(status_code=400, detail="url inválida")
 
-    headers = {"User-Agent": _UA}
+    # Referer/User-Agent configurados no link do canal (provedor que exige o mesmo
+    # cabeçalho de um player de verdade); sem eles, UA de navegador comum
+    headers = {"User-Agent": clean_header_value(ua, 500) if ua else _UA}
+    if ref:
+        headers["Referer"] = clean_header_value(ref, 500)
     range_header = request.headers.get("range")
     if range_header:
         headers["Range"] = range_header

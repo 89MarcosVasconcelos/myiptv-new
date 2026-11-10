@@ -13,6 +13,47 @@ export function Watch({ params }) {
   return tipo === "canal" ? <WatchChannel tvgId={id} /> : <WatchVod id={id} isSeries={tipo === "serie"} />;
 }
 
+// Player externo (VLC, TiviMate, Kodi...): toca o link direto, com o IP da sua casa —
+// sem mixed content/CORS do navegador e sem o bloqueio de IP de datacenter do servidor.
+function ExternalPlayer({ name, url, meta }) {
+  const [msg, setMsg] = useState("");
+  const flash = (t) => {
+    setMsg(t);
+    setTimeout(() => setMsg(""), 3000);
+  };
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(url);
+      flash("Link copiado. Cole no VLC: Mídia → Abrir fluxo de rede.");
+    } catch {
+      window.prompt("Copie o link do stream:", url);
+    }
+  }
+  function download() {
+    const safe = String(name).replace(/[\r\n,]/g, " ");
+    let m3u = `#EXTM3U\n#EXTINF:-1,${safe}\n`;
+    if (meta?.referrer) m3u += `#EXTVLCOPT:http-referrer=${meta.referrer}\n`;
+    if (meta?.user_agent) m3u += `#EXTVLCOPT:http-user-agent=${meta.user_agent}\n`;
+    m3u += `${url}\n`;
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([m3u], { type: "audio/x-mpegurl" }));
+    a.download = `${safe.replace(/[^\w.-]+/g, "_").slice(0, 60) || "canal"}.m3u`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    flash("Lista .m3u baixada — abra com o VLC ou outro player.");
+  }
+  return (
+    <div class="flex items-center gap-2 flex-wrap mt-2" data-testid="external-player">
+      <span class="text-[11px] uppercase tracking-wide text-muted">Não abre aqui?</span>
+      <button class="chip" onClick={copy}>Copiar link</button>
+      <button class="chip" onClick={download}>Baixar .m3u (VLC)</button>
+      {msg && <span class="text-xs text-ok">{msg}</span>}
+    </div>
+  );
+}
+
 function BackBar({ children }) {
   return (
     <div class="px-4 md:px-8 pt-3 pb-2">
@@ -59,6 +100,8 @@ function WatchChannel({ tvgId }) {
 
   const [lang, setLang] = useState(null);
   const [url, setUrl] = useState(null);
+  const [meta, setMeta] = useState(null); // Referer/User-Agent do link, repassados ao proxy
+  const [lastStream, setLastStream] = useState(null); // último link resolvido: continua pro botão "player externo" mesmo se o player falhar
   const [status, setStatus] = useState("Verificando…");
   const urlRef = useRef(null); // último url tocado, pro report-failure saber qual mirror falhou
   // sempre aponta pro onFatal da execução atual do efeito (closure com o
@@ -83,6 +126,9 @@ function WatchChannel({ tvgId }) {
         .then((r) => {
           if (!alive) return;
           urlRef.current = r.url;
+          const m = { referrer: r.referrer, user_agent: r.user_agent };
+          setMeta(m);
+          setLastStream({ url: r.url, meta: m });
           setUrl(r.url);
           setStatus(`Reproduzindo: ${channel.name}`);
         })
@@ -121,7 +167,7 @@ function WatchChannel({ tvgId }) {
       <BackBar>{channel.name}</BackBar>
       <div class="bg-black">
         {url ? (
-          <VideoBox url={url} class="w-full max-w-[1100px] mx-auto aspect-video bg-black" onFatal={() => onFatalRef.current()} />
+          <VideoBox url={url} meta={meta} class="w-full max-w-[1100px] mx-auto aspect-video bg-black" onFatal={() => onFatalRef.current()} />
         ) : (
           <div class="w-full max-w-[1100px] mx-auto aspect-video grid place-items-center text-muted text-sm relative overflow-hidden">
             {channel.backdrop_url && (
@@ -139,6 +185,7 @@ function WatchChannel({ tvgId }) {
           {channel.now_playing ? " · ▶ " + channel.now_playing.title : ""}
         </div>
         <div class="text-xs text-muted mt-1">{status}</div>
+        {lastStream && <ExternalPlayer name={channel.name} url={lastStream.url} meta={lastStream.meta} />}
         {channel.description && (
           <p class="text-sm text-muted mt-3 leading-relaxed max-w-2xl">{channel.description}</p>
         )}

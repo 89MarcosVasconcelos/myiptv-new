@@ -4,11 +4,32 @@ import { getToken } from "./api.js";
 let _Hls = null;
 let _Mpegts = null;
 
-// alguns provedores (Pluto) servem o manifesto com CORS restrito -> passa
-// pelo nosso proxy (só o manifesto; os segmentos vão direto do CDN).
-function viaProxy(url) {
+// Proxy do MANIFESTO HLS (nosso domínio, https). `full` = segmentos e chaves
+// também voltam pelo servidor (provedor https sem CORS nos segmentos). Segmentos
+// http:// já voltam pelo servidor sozinhos (mixed content). `meta` leva o
+// Referer/User-Agent cadastrados no link, que o servidor repassa ao provedor.
+function metaQuery(meta) {
+  let q = "";
+  if (meta?.referrer) q += `&ref=${encodeURIComponent(meta.referrer)}`;
+  if (meta?.user_agent) q += `&ua=${encodeURIComponent(meta.user_agent)}`;
+  return q;
+}
+function viaProxy(url, meta, full = false) {
   const t = getToken();
-  return t ? `/p/${encodeURIComponent(t)}/hls?url=${encodeURIComponent(url)}` : url;
+  return t
+    ? `/p/${encodeURIComponent(t)}/hls?url=${encodeURIComponent(url)}${metaQuery(meta)}${full ? "&full=1" : ""}`
+    : url;
+}
+
+// hosts onde o modo "só manifesto" falhou nesta aba: da próxima vez já começa no
+// modo completo, sem gastar o tempo da 1ª tentativa
+const _fullProxyHosts = new Set();
+function hostOf(url) {
+  try {
+    return new URL(url).host;
+  } catch {
+    return "";
+  }
 }
 
 // "mixed content": página https + link http do provedor -> o navegador tenta
@@ -16,10 +37,10 @@ function viaProxy(url) {
 // provedor pra um IP direto) não tem certificado válido -> ERR_CONNECTION_RESET
 // (achado real em 2026-09-11, via log do Chrome). Só nesse caso específico
 // passa pelo nosso proxy de mídia; link https ou página http não precisam.
-function viaMediaProxyIfNeeded(url) {
+function viaMediaProxyIfNeeded(url, meta) {
   if (location.protocol !== "https:" || !/^http:\/\//i.test(url)) return url;
   const t = getToken();
-  return t ? `/p/${encodeURIComponent(t)}/media?url=${encodeURIComponent(url)}` : url;
+  return t ? `/p/${encodeURIComponent(t)}/media?url=${encodeURIComponent(url)}${metaQuery(meta)}` : url;
 }
 
 // .ts cru (transport stream ao vivo, sem manifesto .m3u8) precisa ser lido
@@ -28,14 +49,14 @@ function viaMediaProxyIfNeeded(url) {
 // autorizam via CORS. Por isso sempre passa pelo NOSSO domínio (mesma origem
 // da página, então CORS nem entra em jogo), igual o .m3u8 já fazia -- não dá
 // pra condicionar a "só se https" como o mp4 faz.
-function viaMediaProxyAlways(url) {
+function viaMediaProxyAlways(url, meta) {
   const t = getToken();
   if (!t) return url;
   // absoluta, não relativa: o mpegts.js busca dados de dentro de um Web
   // Worker (enableWorker), e o worker (rodando a partir de um blob: URL)
   // não consegue resolver caminho relativo -- "Failed to parse URL from
   // /p/...". Achado em 2026-09-13 direto no console do navegador.
-  return `${location.origin}/p/${encodeURIComponent(t)}/media?url=${encodeURIComponent(url)}`;
+  return `${location.origin}/p/${encodeURIComponent(t)}/media?url=${encodeURIComponent(url)}${metaQuery(meta)}`;
 }
 
 // Quanto tempo esperar por QUALQUER dado do link antes de desistir dele.
@@ -120,7 +141,7 @@ function attachDirectRetry(video, fatalOnce) {
   };
 }
 
-export async function attachHls(video, url, onFatal) {
+export async function attachHls(video, url, onFatal, meta) {
   detachHls(video);
   const fatalOnce = onceFatal(video, onFatal);
   startLoadWatchdog(video, fatalOnce);
@@ -152,7 +173,7 @@ export async function attachHls(video, url, onFatal) {
     }
     if (_Mpegts.isSupported()) {
       const player = _Mpegts.createPlayer(
-        { type: "mpegts", isLive: true, url: viaMediaProxyAlways(url) },
+        { type: "mpegts", isLive: true, url: viaMediaProxyAlways(url, meta) },
         { enableWorker: true }
       );
       player.attachMediaElement(video);
@@ -171,23 +192,41 @@ export async function attachHls(video, url, onFatal) {
     // quando NÃO há MSE (Safari/iOS de verdade).
     if (!_Hls) _Hls = (await import("hls.js")).default;
     if (_Hls.isSupported()) {
-      const hls = new _Hls({ maxBufferLength: 20 });
-      hls.loadSource(viaProxy(url));
-      hls.attachMedia(video);
-      hls.on(_Hls.Events.ERROR, (_e, data) => {
-        if (data.fatal) fatalOnce();
-      });
-      video._hls = hls;
+      const host = hostOf(url);
+      let triedFull = _fullProxyHosts.has(host); // já sabemos que esse host precisa do modo completo
+      const startHls = (full) => {
+        const hls = new _Hls({ maxBufferLength: 20 });
+        hls.loadSource(viaProxy(url, meta, full));
+        hls.attachMedia(video);
+        hls.on(_Hls.Events.ERROR, (_e, data) => {
+          if (!data.fatal) return;
+          if (!full && !triedFull) {
+            // 1º tropeço no modo "só manifesto" (segmento https sem CORS, bloqueio...):
+            // refaz uma vez com TUDO pelo servidor antes de desistir do mirror
+            triedFull = true;
+            if (host) _fullProxyHosts.add(host);
+            try {
+              hls.destroy();
+            } catch {}
+            startHls(true);
+            startLoadWatchdog(video, fatalOnce); // a nova tentativa ganha prazo próprio
+            return;
+          }
+          fatalOnce();
+        });
+        video._hls = hls;
+      };
+      startHls(triedFull);
       return;
     }
     if (video.canPlayType("application/vnd.apple.mpegurl")) {
-      video.src = viaProxy(url); // Safari/iOS toca HLS nativo
+      video.src = viaProxy(url, meta, _fullProxyHosts.has(hostOf(url))); // Safari/iOS toca HLS nativo
       attachDirectRetry(video, fatalOnce);
       return;
     }
   }
   // arquivo direto (.mp4/.ts) ou sem suporte a MSE
-  video.src = viaMediaProxyIfNeeded(url);
+  video.src = viaMediaProxyIfNeeded(url, meta);
   attachDirectRetry(video, fatalOnce);
 }
 
