@@ -29,7 +29,7 @@ def _is_client_suppressed(stream) -> bool:
     return failed_at > cutoff
 
 
-def rank_mirrors(candidates):
+def rank_mirrors(candidates, exclude_dead: bool = False):
     """Ordena uma lista de mirrors (objetos com `is_healthy`,
     `consecutive_failures`, `last_checked_at`, `client_failed_at` — `Stream`
     ou `VodStream`) do melhor pro pior. Genérico pra ser reaproveitado pelo
@@ -48,6 +48,13 @@ def rank_mirrors(candidates):
     resta é `client_failed_at`: reportado pelo NAVEGADOR de um usuário real
     tentando tocar, esse sim reflete o que importa."""
     usable = [s for s in candidates if not _is_client_suppressed(s)]
+    if exclude_dead:
+        # is_healthy=False é MORTO confirmado (404/410/DNS/recusado -- ver
+        # stream_validation.check_stream); NULL (inconclusivo) e True continuam
+        usable = [s for s in usable if s.is_healthy is not False]
+        # flow_ok=False: reprovado em "Validar fluxo contínuo" (travava/parava de
+        # enviar dados de verdade) -- some pro usuário até ser reprovado/excluído
+        usable = [s for s in usable if getattr(s, "flow_ok", None) is not False]
     if not usable:
         return []
 
@@ -80,7 +87,23 @@ def _ranked_streams(channel: Channel):
     """Todos os mirrors saudáveis de um canal (e sem reporte recente de falha real
     do navegador de um usuário), do melhor pro pior (menos falhas seguidas,
     checado mais recentemente primeiro)."""
-    return rank_mirrors(channel.streams)
+    # canais: link comprovadamente morto não é oferecido (antes o usuário ficava
+    # tentando um por um até acabar e ver "nenhum mirror"). VOD segue sem isso.
+    return rank_mirrors(channel.streams, exclude_dead=True)
+
+
+def playable_stream_clause():
+    """Mesmo critério do ranking, em SQL: o link não está morto nem suprimido por
+    falha recente reportada pelo navegador. Usado pra listar só canais que têm
+    ao menos 1 link tocável."""
+    from sqlalchemy import and_
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=CLIENT_FAILURE_SUPPRESS_MINUTES)).replace(tzinfo=None)
+    return and_(
+        or_(Stream.is_healthy.is_(None), Stream.is_healthy.is_(True)),
+        or_(Stream.flow_ok.is_(None), Stream.flow_ok.is_(True)),
+        or_(Stream.client_failed_at.is_(None), Stream.client_failed_at < cutoff),
+    )
 
 
 def _best_stream(channel: Channel):
@@ -101,7 +124,7 @@ def _active_channels(db: Session):
         db.query(Channel)
         .options(joinedload(Channel.streams))
         .filter(Channel.is_active.is_(True))
-        .filter(Channel.streams.any())
+        .filter(Channel.streams.any(playable_stream_clause()))
         .order_by(Channel.category, Channel.name)
         .all()
     )

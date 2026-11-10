@@ -157,6 +157,21 @@ def _corpo_e_html(data: bytes) -> bool:
     return head.startswith(_HTML_STARTS)
 
 
+_SINAIS_DE_MORTO = (
+    "name or service not known", "temporary failure in name resolution", "nameresolutionerror",
+    "getaddrinfo failed", "nodename nor servname", "no address associated", "failed to resolve",
+    "connection refused", "errno 111", "winerror 10061",
+)
+
+
+def _definitivamente_morto(exc: Exception) -> bool:
+    if isinstance(exc, (requests.exceptions.InvalidURL, requests.exceptions.InvalidSchema,
+                        requests.exceptions.MissingSchema)):
+        return True
+    texto = str(exc).lower()
+    return any(sinal in texto for sinal in _SINAIS_DE_MORTO)
+
+
 def check_stream(url: str, timeout: float, headers: dict | None = None) -> str:
     """Classifica o link em OK / MORTO / INCONCLUSIVO.
 
@@ -190,8 +205,13 @@ def check_stream(url: str, timeout: float, headers: dict | None = None) -> str:
             final_url = str(resp.url)
     except requests.Timeout:
         return INCONCLUSIVO  # lento ou engolindo a conexão: não dá pra afirmar
-    except requests.RequestException:
-        return MORTO  # DNS não resolve / conexão recusada
+    except requests.RequestException as e:
+        # MORTO só quando é definitivo: DNS que não resolve, conexão recusada,
+        # URL inválida. Reset de conexão / erro de SSL vindo do IP da VPS é cara
+        # de bloqueio de datacenter (o navegador do usuário pode tocar), então é
+        # INCONCLUSIVO -- agora que MORTO esconde o canal do usuário, errar pra
+        # esse lado seria esconder conteúdo que funciona.
+        return MORTO if _definitivamente_morto(e) else INCONCLUSIVO
 
     text = data.decode("utf-8", errors="replace")
     if text.lstrip().startswith("#EXTM3U"):

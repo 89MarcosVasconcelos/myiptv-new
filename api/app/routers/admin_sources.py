@@ -232,3 +232,33 @@ def delete_one_broken(stream_id: int, db: Session = Depends(get_db), _admin: Adm
     if r is None:
         raise HTTPException(404, "Esse link não está mais na lista de problemas")
     return r
+
+
+# --- Validar fluxo contínuo: 2ª etapa, lê o stream de verdade e lista os instáveis ---
+
+class FlowOptions(BaseModel):
+    retest_all: bool = False
+
+
+@router.post("/sources/flow")
+def validate_flow(body: FlowOptions = FlowOptions(), _admin: AdminUser = Depends(require_admin)):
+    return {"job_id": stream_cleanup.start_flow_job(body.retest_all)}
+
+
+@router.get("/sources/unstable")
+def list_unstable_streams(q: Optional[str] = None, limit: int = 50, offset: int = 0,
+                          db: Session = Depends(get_db), _admin: AdminUser = Depends(require_admin)):
+    return stream_cleanup.list_broken(db, q, max(1, min(limit, 200)), max(0, offset), kind="flow")
+
+
+@router.post("/sources/unstable/delete-all")
+def delete_all_unstable(db: Session = Depends(get_db), _admin: AdminUser = Depends(require_admin)):
+    return stream_cleanup.delete_all(db, kind="flow")
+
+
+@router.delete("/sources/unstable/{stream_id}")
+def delete_one_unstable(stream_id: int, db: Session = Depends(get_db), _admin: AdminUser = Depends(require_admin)):
+    r = stream_cleanup.delete_one(db, stream_id, kind="flow")
+    if r is None:
+        raise HTTPException(404, "Esse link não está mais na lista de instáveis")
+    return r

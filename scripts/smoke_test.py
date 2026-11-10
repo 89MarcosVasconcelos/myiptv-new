@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Teste de fumaça do MPIPTV — roda contra o site JÁ NO AR (não é teste de
+"""Teste de fumaça do MPTV — roda contra o site JÁ NO AR (não é teste de
 unidade, é ponta-a-ponta pela API real) pra pegar regressão depois de um
 deploy: login, papéis, conteúdo, proxy HLS, console do banco, upload de CSV,
 "continuar assistindo".

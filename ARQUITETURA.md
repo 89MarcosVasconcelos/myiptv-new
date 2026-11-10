@@ -1,7 +1,7 @@
-> **Nota (MPIPTV):** este documento é o desenho original do projeto-base
+> **Nota (MPTV):** este documento é o desenho original do projeto-base
 > (DevolpsTV, de Bruno Baumgartner) e foi mantido como referência histórica de
 > decisões. Os trechos sobre a VPS/`exposite`/nginx e o caminho `/iptv/` não valem
-> mais: o MPIPTV roda no Coolify (ver `README.md`), na raiz do domínio, com
+> mais: o MPTV roda no Coolify (ver `README.md`), na raiz do domínio, com
 > migrations automáticas, importação de listas M3U e proteção SSRF.
 
 # IPTV-BR — Documento de Arquitetura

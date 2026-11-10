@@ -93,7 +93,7 @@ def parse_m3u(text: str) -> list[dict]:
 def fetch_m3u_text(url: str) -> str:
     """Baixa a lista por URL (anti-SSRF, com teto de tamanho). Decodifica como
     UTF-8 e, se falhar, como Latin-1 (várias listas BR antigas são ISO-8859-1)."""
-    resp = safe_get(url, headers={"User-Agent": "Mozilla/5.0 (compatible; MPIPTV/1.0)"}, timeout=30, stream=True)
+    resp = safe_get(url, headers={"User-Agent": "Mozilla/5.0 (compatible; MPTV/1.0)"}, timeout=30, stream=True)
     try:
         if resp.status_code >= 400:
             raise ValueError(f"a origem respondeu HTTP {resp.status_code}")

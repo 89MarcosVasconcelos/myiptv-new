@@ -1,4 +1,4 @@
-# MPIPTV — compose para Coolify (build pack "Docker Compose") e para uso local.
+# MPTV — compose para Coolify (build pack "Docker Compose") e para uso local.
 #
 #   app    -> API FastAPI + front estático (porta 7678). É o serviço ao qual o
 #             domínio deve apontar no Coolify (ex.: https://seu-dominio:7678).

@@ -59,6 +59,12 @@ class Stream(Base):
     # Ver ARQUITETURA.md secao 8.2.
     client_failed_at = Column(DateTime)
     client_failure_count = Column(Integer, nullable=False, default=0)
+    # "Validar fluxo continuo" (migration 011): True = o stream entregou dados
+    # de forma continua (TS bruto) / segmentos de verdade (HLS); False = parou,
+    # travou ou so deu o inicio; NULL = nunca testado ou resultado inconclusivo
+    flow_ok = Column(Boolean)
+    flow_checked_at = Column(DateTime)
+    flow_note = Column(String(160))
     created_at = Column(DateTime, server_default=func.now())
 
     channel = relationship("Channel", back_populates="streams")

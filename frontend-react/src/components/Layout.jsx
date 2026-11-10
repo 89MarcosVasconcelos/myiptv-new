@@ -2,7 +2,7 @@ import { useState, useEffect } from "preact/hooks";
 import { Link, useLocation, navigate } from "../lib/router.jsx";
 import { adminApi, api, setAdultPin, hasAdultPin } from "../lib/api.js";
 
-// Layout do projeto MPIPTV (herdado do front Laravel/Vue anterior): sidebar
+// Layout do projeto MPTV (herdado do front Laravel/Vue anterior): sidebar
 // fixa de 16rem com seções, cabeçalho "sticky" translúcido com o título da
 // página e gaveta no mobile. As CORES são os tokens do DevolpsTV
 // (tailwind.config.js) — só a estrutura/classes são as nossas.
@@ -70,22 +70,34 @@ function titleFor(path) {
   if (TITLES[path]) return TITLES[path];
   if (path.startsWith("/assistir")) return "Assistir";
   if (path.startsWith("/genero")) return "Gênero";
-  return "MPIPTV";
+  return "MPTV";
+}
+
+// Marca "MPTV": uma TV com antena, tela com o M de MP e o botão play (o P/TV).
+// Mesmo desenho de public/favicon.svg.
+export function BrandMark({ class: cls = "h-8 w-8" }) {
+  return (
+    <svg class={cls} viewBox="6 4 52 53" aria-hidden="true">
+      <defs>
+        <linearGradient id="mptv-g" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="#00d9ff" />
+          <stop offset="1" stop-color="#2f6fff" />
+        </linearGradient>
+      </defs>
+      <path d="M32 15 L21 6 M32 15 L43 6" stroke="url(#mptv-g)" stroke-width="3.6" stroke-linecap="round" fill="none" />
+      <rect x="6" y="15" width="52" height="42" rx="11" fill="url(#mptv-g)" />
+      <path d="M15 45 V28 L23 38 L31 28 V45" stroke="#041018" stroke-width="4.4" stroke-linecap="round" stroke-linejoin="round" fill="none" />
+      <path d="M39 29 V44 L52 36.5 Z" fill="#041018" stroke="#041018" stroke-width="3" stroke-linejoin="round" />
+    </svg>
+  );
 }
 
 export function Brand({ big = false }) {
   return (
     <span class="flex items-center gap-2">
-      <span
-        class={
-          "flex items-center justify-center rounded-md bg-gradient-to-br from-accent to-accent2 font-bold text-[#041018] " +
-          (big ? "h-10 w-10" : "h-8 w-8")
-        }
-      >
-        M
-      </span>
-      <span class={"font-display font-semibold tracking-tight text-text " + (big ? "text-2xl" : "text-lg")}>
-        MP<span class="text-accent">IPTV</span>
+      <BrandMark class={big ? "h-11 w-11" : "h-9 w-9"} />
+      <span class={"font-display font-bold tracking-tight text-text " + (big ? "text-3xl" : "text-xl")}>
+        MP<span class="text-accent">TV</span>
       </span>
     </span>
   );

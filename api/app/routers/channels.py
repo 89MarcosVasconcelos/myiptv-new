@@ -13,9 +13,11 @@ from ..epg import now_playing_map, upcoming_programs
 from ..models import AccessToken, Channel, Program, Stream
 from ..playlist_builder import (
     _ranked_streams,
+    playable_stream_clause,
     ranked_stream_urls,
     ranked_streams_by_language,
 )
+from ..resolve_probe import pick_playable
 from ..content_access import allows_live
 from ..security import require_valid_token
 
@@ -45,7 +47,9 @@ def _visible_channels_query(db: Session, hide_adult: bool = True):
     cadastrado (mesmo critério de active_channels_with_all_streams, mas sem
     trazer os streams — usado tanto pra paginar quanto pra contar categorias
     sem carregar o catálogo inteiro)."""
-    q = db.query(Channel).filter(Channel.is_active.is_(True)).filter(Channel.streams.any())
+    # só canal com pelo menos 1 link tocável (não morto e não suprimido por falha recente):
+    # antes aparecia canal com todos os links mortos e o usuário só descobria ao abrir
+    q = db.query(Channel).filter(Channel.is_active.is_(True)).filter(Channel.streams.any(playable_stream_clause()))
     if hide_adult:
         # category != ADULT_CATEGORY sozinho excluiria quem tem category NULL
         # (NULL != 'Adulto' dá NULL em SQL, não TRUE) -- por isso o OR explícito
@@ -341,11 +345,27 @@ def resolve_channel(
     if channel is None:
         raise HTTPException(status_code=404, detail="Canal não encontrado")
 
-    candidates = ranked_stream_urls(channel, lang=lang)
-    if not candidates:
-        suffix = f" em {lang}" if lang else ""
-        raise HTTPException(status_code=503, detail=f"Esse canal não tem nenhum mirror cadastrado{suffix}.")
-    return {"tvg_id": tvg_id, "url": candidates[0], "checked_mirrors": len(candidates), "lang": lang}
+    ranked = _ranked_streams(channel)
+    if lang is not None:
+        ranked = [s for s in ranked if (s.lang_label or "Português") == lang]
+    suffix = f" em {lang}" if lang else ""
+    if not ranked:
+        if channel.streams:
+            # tem link cadastrado, mas todos estão mortos ou falharam há pouco no navegador
+            raise HTTPException(
+                status_code=503,
+                detail=f"Todos os links desse canal{suffix} estão fora do ar no momento. Tente de novo mais tarde.",
+            )
+        raise HTTPException(status_code=503, detail=f"Esse canal não tem nenhum link cadastrado{suffix}.")
+
+    # testa de verdade os melhores candidatos e descarta já o que está morto (resolve_probe.py)
+    playable = pick_playable(db, ranked)
+    if not playable:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Todos os links desse canal{suffix} estão fora do ar no momento. Tente de novo mais tarde.",
+        )
+    return {"tvg_id": tvg_id, "url": playable[0].url, "checked_mirrors": len(playable), "lang": lang}
 
 
 @router.get("/p/{token}/channels/{tvg_id}/epg")

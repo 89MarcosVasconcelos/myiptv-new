@@ -1,11 +1,11 @@
-# MPIPTV
+# MPTV
 
 Plataforma IPTV self-hosted (live + VOD): agrega canais, valida os links
 continuamente, serve a playlist M3U e um site com player (hls.js / mpegts.js).
 
 O projeto é baseado no **DevolpsTV**, de Bruno Baumgartner
 (<https://github.com/brunobaumgartner/DevolpsTV>), com layout próprio e melhorias
-vindas do MPIPTV anterior (Laravel/Vue).
+vindas do MPTV anterior (Laravel/Vue).
 
 ## Stack
 

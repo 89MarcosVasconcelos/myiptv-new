@@ -183,7 +183,7 @@ def github_search_enabled() -> bool:
 
 
 def _gh(path: str, params: dict | None = None):
-    headers = {"Accept": "application/vnd.github+json", "User-Agent": "MPIPTV-admin",
+    headers = {"Accept": "application/vnd.github+json", "User-Agent": "MPTV-admin",
                "X-GitHub-Api-Version": "2022-11-28"}
     if GITHUB_TOKEN:
         headers["Authorization"] = f"Bearer {GITHUB_TOKEN}"

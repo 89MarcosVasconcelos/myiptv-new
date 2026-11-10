@@ -17,7 +17,7 @@ from .routers import admin, admin_sources, channels, health, hls_proxy, media_pr
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("iptv-api")
 
-app = FastAPI(title="MPIPTV API")
+app = FastAPI(title="MPTV API")
 
 # CORS liberado pra facilitar o teste local do frontend. Restringir antes de expor
 # publicamente (ver ARQUITETURA.md secao 9).

@@ -1,6 +1,6 @@
 {
-  "name": "MPIPTV",
-  "short_name": "MPIPTV",
+  "name": "MPTV",
+  "short_name": "MPTV",
   "description": "TV ao vivo e catálogo de filmes e séries",
   "start_url": ".",
   "scope": ".",
