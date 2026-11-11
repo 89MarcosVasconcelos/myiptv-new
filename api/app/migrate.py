@@ -87,7 +87,8 @@ def run_migrations(engine, final: bool = True) -> None:
         for statement in _split_statements(path.read_text(encoding="utf-8")):
             try:
                 with engine.begin() as conn:
-                    conn.exec_driver_sql(statement)
+                    # pymysql faz `query % ()`: um "%" literal (ex.: LIKE '401%') derruba a subida da API
+                    conn.exec_driver_sql(statement.replace("%", "%%"))
             except (OperationalError, ProgrammingError) as e:
                 errno = e.orig.args[0] if e.orig is not None and e.orig.args else None
                 if errno in _ALREADY_EXISTS_ERRNOS:

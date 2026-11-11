@@ -447,6 +447,13 @@ function TmdbLoad({ configured }) {
         Busca no TMDB capa, fundo, sinopse, ano, gênero e nota dos títulos do catálogo
         {stats ? ` (${stats.total} no total, ${stats.missing} com algum dado faltando)` : ""}.
       </p>
+      {stats && stats.total === 0 && (
+        <p class="text-xs text-warn mb-3" data-testid="tmdb-empty">
+          O catálogo de <b>Filmes/Séries/Anime</b> está vazio, por isso não há nada para carregar. As cargas só atuam em
+          títulos do catálogo (não em canais de TV ao vivo). Importe os títulos pelo painel Xtream (seção acima) ou por
+          CSV e depois rode a carga complementar para completar capa, sinopse, nota e gênero.
+        </p>
+      )}
       <div class="flex flex-wrap gap-2">
         <button class="btn" disabled={!configured || running} onClick={() => start("incremental")}>
           Carga complementar{stats ? ` (${stats.missing})` : ""}
@@ -490,7 +497,12 @@ function TmdbLoad({ configured }) {
             </>
           )}
           {job.status === "error" && <p class="text-danger">Erro: {job.error || "?"}</p>}
-          {(job.status === "done" || job.status === "cancelled") && (
+          {job.status === "done" && job.processed === 0 && (
+            <p class="text-warn">
+              Nada para carregar: {stats?.total ? "todos os títulos já estão completos." : "o catálogo de filmes/séries está vazio."}
+            </p>
+          )}
+          {(job.status === "done" || job.status === "cancelled") && job.processed > 0 && (
             <p class={job.status === "done" ? "text-ok" : "text-warn"}>
               {job.status === "done" ? "Concluído" : "Cancelado"}: {job.updated ?? 0} título(s) atualizado(s) de {job.processed} verificado(s)
               {" "}({job.matched ?? 0} capa(s) nova(s), {job.genres ?? 0} gênero(s)
