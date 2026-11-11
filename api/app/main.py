@@ -10,7 +10,7 @@ from .auth_admin import hash_password
 from .config import ADMIN_PASSWORD, ADMIN_USERNAME, FRONTEND_DIR
 from .db import Base, SessionLocal, engine
 from .genre_classifier import seed_default_keywords_if_empty, sync_new_default_keywords
-from .migrate import run_migrations, wait_for_db
+from .migrate import repair_vod_items, run_migrations, wait_for_db
 from .models import AccessToken, AdminUser
 from .routers import admin, admin_sources, channels, health, hls_proxy, media_proxy, playlist, vod
 
@@ -52,6 +52,7 @@ def on_startup():
     run_migrations(engine, final=False)
     Base.metadata.create_all(bind=engine)
     run_migrations(engine)  # reaplica as adiadas (dependiam de tabelas do create_all)
+    repair_vod_items(engine)
     _ensure_dev_token()
     _ensure_admin_user()
     _ensure_genre_keywords()
