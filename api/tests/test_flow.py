@@ -97,7 +97,9 @@ def test_fecha_cedo(base):
 
 
 def test_401_html_404(base):
-    assert check_flow(base + "/401")[0] == FLUXO_FALHA
+    # 401/403/429 = servidor recusou (limite de conexões/bloqueio de IP): inconclusivo, NÃO falha
+    estado, nota = check_flow(base + "/401")
+    assert estado == FLUXO_INCONCLUSIVO and "não conta" in nota
     assert check_flow(base + "/html")[0] == FLUXO_FALHA
     assert check_flow(base + "/x404")[0] == FLUXO_FALHA
 
@@ -123,7 +125,7 @@ def test_queda_de_internet_nao_condena_links(base, monkeypatch):
 
     monkeypatch.setattr(stream_cleanup, "_internet_ok", lambda: False)
     monkeypatch.setattr(stream_cleanup.time, "sleep", lambda s: None)
-    sid, estado, nota = stream_cleanup._flow_check((1, base + "/401", None, None))
+    sid, estado, nota = stream_cleanup._flow_check((1, base + "/html", None, None))
     assert estado == FLUXO_INCONCLUSIVO and "sem internet" in nota
     monkeypatch.setattr(stream_cleanup, "_internet_ok", lambda: True)
-    assert stream_cleanup._flow_check((1, base + "/401", None, None))[1] == FLUXO_FALHA
+    assert stream_cleanup._flow_check((1, base + "/html", None, None))[1] == FLUXO_FALHA

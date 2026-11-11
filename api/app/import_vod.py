@@ -115,6 +115,15 @@ def _clean_int(value):
         return None
 
 
+def _clean_rating(value):
+    """Nota 0-10 (TMDB/IMDb). Vazio, texto ou fora da faixa = None."""
+    try:
+        f = float(str(value).strip().replace(",", "."))
+    except (TypeError, ValueError):
+        return None
+    return round(f, 1) if 0 < f <= 10 else None
+
+
 def _clean_language(value):
     """Normaliza pro código canônico (aceita "pt", "Português", "portuguese").
     Valor não reconhecido é ignorado em vez de derrubar o arquivo inteiro —
@@ -218,6 +227,10 @@ def _import_rows(rows: list[dict], db, on_progress=None) -> dict:
         genre = _clean(row.get("genre"))
         language = _clean_language(row.get("language"))
         year = _clean_int(row.get("year"))
+        # opcionais (vêm de fontes que já trazem esses dados, ex.: painel Xtream)
+        backdrop_url = clean_url(row.get("backdrop_url"), 600) or None
+        rating = _clean_rating(row.get("rating"))
+        tmdb_id = _clean_int(row.get("tmdb_id"))
 
         if vod_title is None:
             vod_title = VodTitle(
@@ -228,6 +241,9 @@ def _import_rows(rows: list[dict], db, on_progress=None) -> dict:
                 genre=genre,
                 language=language,
                 year=year,
+                backdrop_url=backdrop_url,
+                rating=rating,
+                tmdb_id=tmdb_id,
             )
             db.add(vod_title)
             stats["titulos_novos"] += 1
@@ -241,6 +257,9 @@ def _import_rows(rows: list[dict], db, on_progress=None) -> dict:
                 ("genre", genre),
                 ("language", language),
                 ("year", year),
+                ("backdrop_url", backdrop_url),
+                ("rating", rating),
+                ("tmdb_id", tmdb_id),
             ):
                 if value is not None and getattr(vod_title, field) != value:
                     setattr(vod_title, field, value)

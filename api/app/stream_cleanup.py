@@ -136,7 +136,9 @@ def start_validation_job() -> str:
 # --- Validar fluxo contínuo: lê o stream de verdade (ver stream_flow.py) ---
 
 FLOW_MAX_WORKERS = 24
-FLOW_PER_HOST = 5     # conexões simultâneas por provedor: o limite de conexões do painel é a causa de vários 401/502
+FLOW_PER_HOST = 2     # conexões simultâneas por provedor: painel Xtream costuma aceitar pouquíssimas por conta
+HOST_MIN_TESTS = 6    # amostra mínima (num bloco) pra concluir que o host limita conexões
+HOST_LIMITED_RATIO = 0.6
 FLOW_CHUNK = 200
 _host_sems: dict[str, threading.Semaphore] = {}
 _host_lock = threading.Lock()
@@ -149,6 +151,19 @@ def _host_sem(url: str) -> threading.Semaphore:
         if sem is None:
             sem = _host_sems[host] = threading.Semaphore(FLOW_PER_HOST)
         return sem
+
+
+def _host_of(url: str) -> str:
+    return (urlsplit(url).netloc or "?").lower()
+
+
+# notas de falha que também são o sintoma de um servidor que limita conexões, não de link morto
+_SUSPECT_PREFIXES = ("demorou", "conexão falhou", "travou", "o servidor encerrou", "pausa", "HTTP 5", "abriu a conexão",
+                     "segmento travou")
+
+
+def _is_suspect(note: str) -> bool:
+    return (note or "").startswith(_SUSPECT_PREFIXES)
 
 
 _net = {"at": 0.0, "ok": True}
@@ -208,7 +223,7 @@ def start_flow_job(retest_all: bool = False) -> str:
     with _lock:
         _jobs[job_id] = {
             "kind": "flow", "status": "running", "phase": "lendo o fluxo dos links", "total": 0, "processed": 0,
-            "ok": 0, "unstable": 0, "unknown": 0, "error": None,
+            "ok": 0, "unstable": 0, "unknown": 0, "error": None, "limited_hosts": [],
             "started_at": datetime.now(timezone.utc).isoformat(),
         }
     register("Validar fluxo contínuo", job_id, get_validation_job)
@@ -221,6 +236,7 @@ def start_flow_job(retest_all: bool = False) -> str:
             _set(job_id, total=total)
             last_id, done = 0, 0
             ok = unstable = unknown = 0
+            limited: set[str] = set()
             while True:
                 chunk = (
                     db.query(Stream.id, Stream.url, Stream.referrer, Stream.user_agent)
@@ -240,8 +256,18 @@ def start_flow_job(retest_all: bool = False) -> str:
                             ordered.append(by_host[h].pop(0))
                 results: dict[int, tuple[str, str]] = {}
                 cancelled = False
+                # host que já mostrou limitar conexões/ficar travando: não testa mais nada dele
+                # nesta rodada (insistir só piora o bloqueio e gera falso "instável")
+                to_test = []
+                for r in ordered:
+                    if _host_of(r[1]) in limited:
+                        results[r[0]] = (FLUXO_INCONCLUSIVO, "não testado: esse servidor limita conexões simultâneas")
+                        done += 1
+                        unknown += 1
+                    else:
+                        to_test.append(r)
                 with ThreadPoolExecutor(max_workers=FLOW_MAX_WORKERS) as pool:
-                    futs = [pool.submit(_flow_check, r) for r in ordered]
+                    futs = [pool.submit(_flow_check, r) for r in to_test]
                     for fut in as_completed(futs):
                         try:
                             sid, state, note = fut.result()
@@ -262,6 +288,23 @@ def start_flow_job(retest_all: bool = False) -> str:
                             for f in futs:
                                 f.cancel()
                             break
+                # um host em que a maioria dos testes deu "suspeito" (travou, recusou, 5xx...) está
+                # limitando conexões: nenhum resultado dele vale como prova -> ninguém é condenado
+                by_host_res = defaultdict(list)
+                url_of = {r[0]: r[1] for r in to_test}
+                for sid, (state, note) in results.items():
+                    if sid in url_of:
+                        by_host_res[_host_of(url_of[sid])].append((sid, state, note))
+                for h, lst in by_host_res.items():
+                    suspicious = [x for x in lst if x[1] == FLUXO_INCONCLUSIVO or (x[1] == FLUXO_FALHA and _is_suspect(x[2]))]
+                    if len(lst) >= HOST_MIN_TESTS and len(suspicious) / len(lst) >= HOST_LIMITED_RATIO:
+                        limited.add(h)
+                        _set(job_id, limited_hosts=sorted(limited))
+                        for sid, state, note in lst:
+                            if state == FLUXO_FALHA:
+                                results[sid] = (FLUXO_INCONCLUSIVO, ("servidor limita conexões; " + note)[:160])
+                                unstable -= 1
+                                unknown += 1
                 now = datetime.now(timezone.utc).replace(tzinfo=None)
                 for sid, (state, note) in results.items():
                     flow_ok = True if state == FLUXO_OK else False if state == FLUXO_FALHA else None
@@ -357,3 +400,14 @@ def delete_all(db, kind: str = "dead") -> dict:
     channels = _drop_empty_channels(db, channel_ids)
     db.commit()
     return {"links": links, "channels": channels}
+
+
+def clear_unstable(db) -> int:
+    """Tira a marcação de instável de TODOS os links (voltam a aparecer pros usuários).
+    Não apaga nada. Devolve quantos links foram liberados."""
+    n = (
+        db.query(Stream).filter(unstable_filter())
+        .update({"flow_ok": None, "flow_note": None}, synchronize_session=False)
+    )
+    db.commit()
+    return n

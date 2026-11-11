@@ -236,10 +236,14 @@ def check_flow(url: str, headers: dict | None = None) -> tuple[str, str]:
     started = time.monotonic()
     try:
         with _get(url, headers) as resp:
+            if resp.status_code in _BLOQUEIO:
+                # 401/403/429 NÃO prova que o link é ruim: painel Xtream responde 401 quando a
+                # conta já está no limite de conexões simultâneas (achado em 2026-11-10: 21 mil
+                # links do mesmo painel reprovados assim, inclusive por causa dos testes em
+                # paralelo do próprio servidor) e muito provedor recusa IP de datacenter.
+                # Fica inconclusivo: o link continua aparecendo e o player decide.
+                return FLUXO_INCONCLUSIVO, f"recusado: {_status_reason(resp.status_code)}; não conta como falha"
             if resp.status_code >= 400:
-                # stream bruto e HLS sem 4xx: quem toca é o servidor (proxy) ou o navegador
-                # direto. Para um 401/403/429 já no 1º pedido não dá pra distinguir -- como o
-                # manifesto/stream passa SEMPRE pelo proxy do servidor, é falha de verdade.
                 return FLUXO_FALHA, _status_reason(resp.status_code)
             first = b""
             it = resp.iter_content(chunk_size=16384)  # UM iterador só: continua de onde parou

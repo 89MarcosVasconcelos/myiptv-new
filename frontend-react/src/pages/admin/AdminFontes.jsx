@@ -68,8 +68,8 @@ export function AdminFontes() {
   return (
     <div class="p-4 max-w-4xl">
       <p class="text-xs text-muted mb-4">
-        Uso pessoal: só você (admin) vê esta página. Aqui entram <b>listas de canais ao vivo</b>; filmes e séries
-        continuam sendo cadastrados à mão (CSV) e ganham capa e sinopse pelo TMDB, lá embaixo.
+        Uso pessoal: só você (admin) vê esta página. Aqui entram <b>listas de canais ao vivo</b>; filmes, séries e
+        animes entram pelo painel Xtream (abaixo) ou por CSV, e ganham capa e sinopse pelo TMDB, lá embaixo.
       </p>
 
       <Panel title="Opções da importação">
@@ -90,6 +90,7 @@ export function AdminFontes() {
 
       <Presets presets={data.presets} onSync={syncPreset} disabled={running} />
       <MySources data={data} onChange={load} onSync={syncSaved} running={running} setErr={setErr} />
+      <XtreamImport />
       <ValidateSources />
       <GitHubDiscover data={data} onAdded={load} sources={data.sources} />
       <TmdbTools configured={data.tmdb_configured} />
@@ -502,6 +503,162 @@ function TmdbLoad({ configured }) {
   );
 }
 
+
+// Filmes / séries / animes direto da API de um painel Xtream Codes (player_api.php).
+// Usuário e senha só trafegam nesta chamada; ficam apenas dentro dos links gerados (que precisam deles pra tocar).
+function XtreamImport() {
+  const [f, setF] = useState({ url: "", username: "", password: "", movies: true, series: true, skip_adult: false, max_series: "" });
+  const [info, setInfo] = useState(null);
+  const [job, setJob] = useState(null);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [asChannels, setAsChannels] = useState(null);
+  const [confirmDel, setConfirmDel] = useState(false);
+  const [msg, setMsg] = useState("");
+  const timer = useRef(null);
+
+  const loadAsChannels = () => adminApi.vodAsChannels().then((r) => setAsChannels(r.channels)).catch(() => {});
+  useEffect(() => {
+    loadAsChannels();
+    return () => clearTimeout(timer.current);
+  }, []);
+
+  const running = job?.status === "running";
+  const set = (k) => (e) => setF({ ...f, [k]: e.currentTarget.type === "checkbox" ? e.currentTarget.checked : e.currentTarget.value });
+  const body = () => ({
+    url: f.url, username: f.username || undefined, password: f.password || undefined,
+    movies: f.movies, series: f.series, skip_adult: f.skip_adult, max_series: parseInt(f.max_series, 10) || 0,
+  });
+
+  async function test() {
+    setErr(""); setInfo(null); setBusy(true);
+    try {
+      setInfo(await adminApi.xtreamTest(body()));
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function poll(id) {
+    try {
+      const j = await adminApi.xtreamStatus(id);
+      setJob((cur) => ({ ...(cur || {}), ...j, id }));
+      if (j.status === "running") timer.current = setTimeout(() => poll(id), 1500);
+      else loadAsChannels();
+    } catch (e) {
+      setErr(e.message);
+    }
+  }
+  async function start() {
+    setErr(""); setMsg(""); setBusy(true);
+    try {
+      const { job_id } = await adminApi.xtreamImport(body());
+      setJob({ id: job_id, status: "running", phase: "iniciando", total: 0, processed: 0 });
+      poll(job_id);
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function removeAsChannels() {
+    setErr(""); setConfirmDel(false);
+    try {
+      const r = await adminApi.deleteVodAsChannels();
+      setMsg(`${r.channels} canal(is) que eram filmes/séries foram removidos da TV ao vivo.`);
+      loadAsChannels();
+    } catch (e) {
+      setErr(e.message);
+    }
+  }
+
+  const pct = job?.total ? Math.round((job.processed / job.total) * 100) : null;
+  const canGo = f.url.trim() && (f.movies || f.series) && !running && !busy;
+
+  return (
+    <Panel title="Importar filmes, séries e animes do painel Xtream">
+      <p class="text-xs text-muted mb-3">
+        Lê a API do painel (categorias, filmes, séries e todos os episódios) e grava no catálogo das telas
+        <b> Filmes / Séries / Anime</b>, com capa, ano e nota quando o painel informa. Pode rodar de novo à vontade:
+        não duplica, só atualiza e acrescenta o que for novo. O gênero vem da categoria do painel.
+      </p>
+      <div class="grid gap-2 sm:grid-cols-3">
+        <input class={inp} placeholder="http://host:porta ou link da lista" value={f.url} onInput={set("url")}
+          disabled={running} data-testid="xt-url" />
+        <input class={inp} placeholder="Usuário (se não estiver no link)" value={f.username} onInput={set("username")}
+          disabled={running} autocomplete="off" data-testid="xt-user" />
+        <input class={inp} type="password" placeholder="Senha (se não estiver no link)" value={f.password}
+          onInput={set("password")} disabled={running} autocomplete="new-password" data-testid="xt-pass" />
+      </div>
+      <div class="flex items-center gap-4 flex-wrap mt-2 text-xs text-muted">
+        <label class="flex items-center gap-1.5"><input type="checkbox" checked={f.movies} disabled={running} onChange={set("movies")} /> Filmes</label>
+        <label class="flex items-center gap-1.5"><input type="checkbox" checked={f.series} disabled={running} onChange={set("series")} /> Séries e animes</label>
+        <label class="flex items-center gap-1.5"><input type="checkbox" checked={f.skip_adult} disabled={running} onChange={set("skip_adult")} /> Pular adultos</label>
+        <label class="flex items-center gap-1.5">
+          Limite de séries
+          <input class={inp + " !w-20"} placeholder="todas" value={f.max_series} disabled={running}
+            onInput={(e) => setF({ ...f, max_series: e.currentTarget.value.replace(/\D/g, "") })} />
+        </label>
+      </div>
+      <div class="flex items-center gap-2 flex-wrap mt-3">
+        <button class="btn" disabled={!f.url.trim() || running || busy} onClick={test} data-testid="xt-test">Testar conexão</button>
+        <button class="btn" disabled={!canGo} onClick={start} data-testid="xt-import">Importar para o catálogo</button>
+        {running && <button class="btn" onClick={() => adminApi.cancelJob(job.id).catch(() => {})}>Cancelar</button>}
+      </div>
+      {err && <p class="mt-2 text-xs text-danger">{err}</p>}
+      {info && (
+        <p class="mt-2 text-xs text-ok" data-testid="xt-info">
+          Conexão ok — conta {info.status || "?"}, expira em {info.expira_em || "?"}, {info.conexoes_max ?? "?"} conexão(ões) simultânea(s),
+          {" "}{info.categorias_filmes} categoria(s) de filmes e {info.categorias_series} de séries.
+        </p>
+      )}
+      {job && (
+        <div class="mt-3 text-xs" data-testid="xt-job">
+          {running && (
+            <>
+              <p class="text-muted">
+                {job.phase || "Processando…"} {pct != null ? `${pct}% (${job.processed}/${job.total})` : ""} — {job.titulos_novos} título(s) novo(s), {job.itens_novos} item(ns) novo(s)
+              </p>
+              <div class="h-2 rounded bg-black/30 mt-2 overflow-hidden">
+                <div class="h-full bg-gradient-to-r from-accent2 to-accent transition-[width]" style={{ width: `${pct || 0}%` }} />
+              </div>
+            </>
+          )}
+          {job.status === "error" && <p class="text-danger">Erro: {job.error || "?"}</p>}
+          {job.status === "cancelled" && <p class="text-warn">Importação cancelada em {job.processed} de {job.total}. O que já entrou ficou no catálogo.</p>}
+          {job.status === "done" && (
+            <p class="text-ok">
+              Concluído: {job.titulos_novos} título(s) novo(s) e {job.titulos_atualizados} atualizado(s); {job.itens_novos} item(ns) novo(s) (filmes/episódios)
+              {job.adultos_ignorados ? `; ${job.adultos_ignorados} adulto(s) ignorado(s)` : ""}
+              {job.series_falhas ? `; ${job.series_falhas} série(s) não puderam ser lidas (rode de novo para tentar outra vez)` : ""}.
+            </p>
+          )}
+        </div>
+      )}
+
+      {asChannels > 0 && (
+        <div class="mt-5 border-t border-white/10 pt-3 text-xs" data-testid="xt-as-channels">
+          <p class="mb-2">
+            Há <b>{asChannels}</b> "canal(is)" na TV ao vivo que na verdade são filmes/séries (entraram pela lista M3U do painel).
+            Depois de importar pelo painel Xtream, eles ficam duplicados e podem sair da TV ao vivo.
+          </p>
+          {confirmDel ? (
+            <div class="border border-warn/40 rounded p-3">
+              <p class="mb-2">Remover <b>{asChannels} canal(is)</b> da TV ao vivo? Só entram nisso os que têm <b>todos</b> os links em /movie/ ou /series/. Não dá para desfazer.</p>
+              <button class="btn mr-2" onClick={removeAsChannels}>Sim, remover</button>
+              <button class="btn" onClick={() => setConfirmDel(false)}>Cancelar</button>
+            </div>
+          ) : (
+            <button class="btn" disabled={running} onClick={() => setConfirmDel(true)}>Remover da TV ao vivo ({asChannels})</button>
+          )}
+        </div>
+      )}
+      {msg && <p class="mt-2 text-xs text-ok">{msg}</p>}
+    </Panel>
+  );
+}
+
 // Validação em 2 etapas dos links de canais cadastrados:
 //  1) "Validar fontes": o link responde e os primeiros bytes parecem vídeo; os MORTOS
 //     (404/410, servidor inexistente) entram na lista de exclusão;
@@ -596,6 +753,12 @@ function ValidateSources() {
                 : `Concluído: ${job.total} link(s) testado(s) — ${job.ok} ok, ${job.dead} morto(s), ${job.unknown} desconhecido(s).`}
             </p>
           )}
+          {job.limited_hosts?.length > 0 && (
+            <p class="text-warn mt-1">
+              {job.limited_hosts.length} servidor(es) limitam conexões simultâneas ({job.limited_hosts.slice(0, 3).join(", ")}
+              {job.limited_hosts.length > 3 ? "…" : ""}): os links deles não foram reprovados nem testados a fundo, ficam como inconclusivos.
+            </p>
+          )}
         </div>
       )}
 
@@ -608,6 +771,7 @@ function ValidateSources() {
       <ProblemList
         kind="flow" title="Links instáveis (sem fluxo contínuo)" running={running} refreshKey={refreshKey}
         list={adminApi.unstableStreams} del={adminApi.deleteUnstable} delAll={adminApi.deleteAllUnstable}
+        clearAll={adminApi.clearUnstable}
         emptyText="Nenhum link instável. Rode a etapa 2 para conferir."
         confirmText="instáveis"
       />
@@ -615,7 +779,7 @@ function ValidateSources() {
   );
 }
 
-function ProblemList({ kind, title, running, refreshKey, list: fetchList, del, delAll, emptyText, confirmText }) {
+function ProblemList({ kind, title, running, refreshKey, list: fetchList, del, delAll, clearAll, emptyText, confirmText }) {
   const [list, setList] = useState({ count: 0, items: [] });
   const [q, setQ] = useState("");
   const [confirmAll, setConfirmAll] = useState(false);
@@ -663,6 +827,17 @@ function ProblemList({ kind, title, running, refreshKey, list: fetchList, del, d
     }
   }
 
+  async function clearMarks() {
+    setErr("");
+    try {
+      const r = await clearAll();
+      setMsg(`${r.links} link(s) liberado(s): voltaram a aparecer para os usuários (nada foi excluído).`);
+      load(true);
+    } catch (e) {
+      setErr(e.message);
+    }
+  }
+
   return (
     <div class="mt-5" data-testid={kind === "flow" ? "unstable-list" : "broken-list"}>
       <div class="flex items-center gap-2 flex-wrap mb-2">
@@ -670,6 +845,12 @@ function ProblemList({ kind, title, running, refreshKey, list: fetchList, del, d
         <input class={inp + " !w-48"} placeholder="Filtrar por canal ou link" value={q}
           onInput={(e) => setQ(e.currentTarget.value)}
           onKeyDown={(e) => e.key === "Enter" && load(true, e.currentTarget.value)} />
+        {clearAll && (
+          <button class="btn" disabled={list.count === 0 || running} onClick={clearMarks}
+            title="Tira a marcação de instável de todos; nada é excluído">
+            Limpar marcações ({list.count})
+          </button>
+        )}
         <button class="btn" disabled={list.count === 0 || running} onClick={() => setConfirmAll(true)}>
           Excluir todos ({list.count})
         </button>

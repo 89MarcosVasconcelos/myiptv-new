@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from ..auth_admin import require_admin
 from ..db import get_db
-from .. import poster_fetch, sources_import, stream_cleanup
+from .. import poster_fetch, sources_import, stream_cleanup, xtream_import
 from ..models import AdminUser, ImportSource, VodTitle
 from ..safe_url import UnsafeUrlError, assert_public_http_url
 from ..sources_import import GitHubError
@@ -262,3 +262,66 @@ def delete_one_unstable(stream_id: int, db: Session = Depends(get_db), _admin: A
     if r is None:
         raise HTTPException(404, "Esse link não está mais na lista de instáveis")
     return r
+
+
+@router.post("/sources/unstable/clear")
+def clear_unstable_marks(db: Session = Depends(get_db), _admin: AdminUser = Depends(require_admin)):
+    """Desfaz a marcação de instável de todos os links (sem excluir nada)."""
+    return {"links": stream_cleanup.clear_unstable(db)}
+
+
+# --- Importar do painel Xtream: filmes, séries (com episódios) e anime pro catálogo VOD ---
+
+class XtreamAccess(BaseModel):
+    url: str
+    username: Optional[str] = None
+    password: Optional[str] = None
+
+
+class XtreamImportOptions(XtreamAccess):
+    movies: bool = True
+    series: bool = True
+    skip_adult: bool = False
+    max_series: int = 0
+
+
+@router.post("/sources/xtream/test")
+def xtream_test(body: XtreamAccess, _admin: AdminUser = Depends(require_admin)):
+    try:
+        base, user, pw = xtream_import.parse_panel_url(body.url, body.username, body.password)
+        return xtream_import.account_info(base, user, pw)
+    except xtream_import.XtreamError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/sources/xtream/import")
+def xtream_start_import(body: XtreamImportOptions, _admin: AdminUser = Depends(require_admin)):
+    if not (body.movies or body.series):
+        raise HTTPException(400, "Marque filmes e/ou séries")
+    try:
+        base, user, pw = xtream_import.parse_panel_url(body.url, body.username, body.password)
+        xtream_import.account_info(base, user, pw)  # falha cedo se a conta não autentica
+    except xtream_import.XtreamError as e:
+        raise HTTPException(400, str(e))
+    job_id = xtream_import.start_import_job(base, user, pw, body.movies, body.series, body.skip_adult,
+                                            max(0, min(body.max_series, 100000)))
+    return {"job_id": job_id}
+
+
+@router.get("/sources/xtream/{job_id}/status")
+def xtream_import_status(job_id: str, _admin: AdminUser = Depends(require_admin)):
+    job = xtream_import.get_job(job_id)
+    if job is None:
+        raise HTTPException(404, "Job não encontrado (ou o container reiniciou)")
+    return job
+
+
+@router.get("/sources/vod-as-channels")
+def count_vod_as_channels(db: Session = Depends(get_db), _admin: AdminUser = Depends(require_admin)):
+    """Quantos 'canais' na verdade são filmes/séries (links /movie/ e /series/) que entraram pelo M3U."""
+    return {"channels": xtream_import.count_vod_channels(db)}
+
+
+@router.post("/sources/vod-as-channels/delete")
+def delete_vod_as_channels(db: Session = Depends(get_db), _admin: AdminUser = Depends(require_admin)):
+    return {"channels": xtream_import.delete_vod_channels(db)}
