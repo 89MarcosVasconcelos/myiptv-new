@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel
@@ -120,6 +120,44 @@ def _category_counts(db: Session, hide_adult: bool = True):
     return named
 
 
+def _like_escape(token: str) -> str:
+    return token.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _apply_filters(
+    base,
+    category: Optional[str] = None,
+    categories: Optional[List[str]] = None,
+    language: Optional[str] = None,
+    q: Optional[str] = None,
+    tvg_ids: Optional[List[str]] = None,
+):
+    """Filtros compartilhados pela listagem e pela lista leve de nomes.
+    `categories` (vários segmentos, OR entre eles) acumula com `category`.
+    A busca `q` quebra em palavras e exige TODAS no nome (qualquer ordem) --
+    "globo sp" acha "Globo SP HD"; a comparação de acento/caixa vem da
+    collation do MySQL (utf8mb4_0900_ai_ci: 'camara' acha 'Câmara')."""
+    cats = [c for c in ([category] if category else []) + list(categories or []) if c]
+    if cats:
+        conds = []
+        named = [c for c in cats if c != CATEGORY_NONE]
+        if named:
+            conds.append(Channel.category.in_(named[:300]))
+        if CATEGORY_NONE in cats:
+            conds.append(Channel.category.is_(None))
+        base = base.filter(or_(*conds))
+    if language == LANGUAGE_NONE:
+        base = base.filter(Channel.language.is_(None))
+    elif language:
+        base = base.filter(Channel.language == language)
+    if tvg_ids:
+        base = base.filter(Channel.tvg_id.in_([t for t in tvg_ids if t][:500]))
+    if q:
+        for token in q.split()[:6]:
+            base = base.filter(Channel.name.ilike(f"%{_like_escape(token)}%", escape="\\"))
+    return base
+
+
 class AdultUnlock(BaseModel):
     pin: str
 
@@ -148,8 +186,10 @@ def list_channels(
     token: str,
     response: Response,
     category: Optional[str] = None,
+    categories: Optional[List[str]] = Query(None),
     language: Optional[str] = None,
     q: Optional[str] = None,
+    tvg_ids: Optional[List[str]] = Query(None),
     limit: int = Query(60, ge=1, le=200),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
@@ -161,21 +201,14 @@ def list_channels(
     o filtro por categoria/busca e a paginação ficavam todos no navegador).
     `language` filtra pelo idioma do CONTEÚDO do canal (Channel.language,
     recuperado dos dados originais de importação) -- não confundir com
-    `?lang=` do /resolve, que escolhe entre mirrors de ÁUDIO do mesmo canal."""
+    `?lang=` do /resolve, que escolhe entre mirrors de ÁUDIO do mesmo canal.
+    `categories` (repetível) = vários segmentos; `tvg_ids` (repetível) = só
+    esses canais -- usados pelos dois menus multiselect da tela de TV."""
     response.headers["Cache-Control"] = "public, max-age=120"
     if not allows_live(_access):
         return {"count": 0, "channels": []}  # conta sem "TV ao vivo" (ver content_access.py)
     base = _visible_channels_query(db, hide_adult=_hide_adult(_access))
-    if category == CATEGORY_NONE:
-        base = base.filter(Channel.category.is_(None))
-    elif category:
-        base = base.filter(Channel.category == category)
-    if language == LANGUAGE_NONE:
-        base = base.filter(Channel.language.is_(None))
-    elif language:
-        base = base.filter(Channel.language == language)
-    if q:
-        base = base.filter(Channel.name.ilike(f"%{q.strip()}%"))
+    base = _apply_filters(base, category, categories, language, q, tvg_ids)
 
     total = base.with_entities(func.count(Channel.id)).scalar() or 0
 
@@ -236,6 +269,46 @@ def list_channel_languages(
             {"language": l, "label": languages.label(None if l == LANGUAGE_NONE else l), "count": n}
             for l, n in _language_counts(db, hide_adult=_hide_adult(_access))
         ]
+    }
+
+
+@router.get("/p/{token}/channels/names")
+def list_channel_names(
+    token: str,
+    response: Response,
+    categories: Optional[List[str]] = Query(None),
+    language: Optional[str] = None,
+    q: Optional[str] = None,
+    limit: int = Query(300, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+    _access: AccessToken = Depends(require_valid_token),
+):
+    """Lista LEVE (sem streams/EPG) dos canais de um ou mais segmentos -- é o
+    que alimenta o 2º menu multiselect da tela de TV ao vivo ("canais do
+    segmento"). Sem `categories` devolve vazio de propósito: o 2º menu só
+    carrega depois que o 1º tem seleção, em vez de despejar ~28 mil nomes."""
+    response.headers["Cache-Control"] = "public, max-age=120"
+    if not allows_live(_access) or not categories:
+        return {"count": 0, "channels": []}
+    base = _apply_filters(
+        _visible_channels_query(db, hide_adult=_hide_adult(_access)),
+        categories=categories, language=language, q=q,
+    )
+    total = base.with_entities(func.count(Channel.id)).scalar() or 0
+    rows = (
+        base.with_entities(Channel.tvg_id, Channel.name, Channel.category, Channel.logo_url)
+        .order_by(Channel.name)
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+    return {
+        "count": total,
+        "channels": [
+            {"tvg_id": t, "name": n, "category": c, "category_label": category_label(c), "logo_url": lg}
+            for t, n, c, lg in rows
+        ],
     }
 
 

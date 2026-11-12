@@ -19,6 +19,16 @@ export function hasAdultPin() {
   return !!_adultPin;
 }
 
+// querystring que aceita arrays (parâmetro repetido) e ignora vazios
+function qs(params = {}) {
+  const u = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (Array.isArray(v)) v.forEach((x) => u.append(k, x));
+    else if (v !== undefined && v !== null && v !== "") u.append(k, v);
+  }
+  return u;
+}
+
 async function req(path, opts = {}) {
   const headers = { ...(opts.headers || {}) };
   if (_adultPin) headers["X-Adult-Pin"] = _adultPin;
@@ -41,8 +51,12 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ pin }),
     }),
+  // params aceita arrays (ex.: categories: [...], tvg_ids: [...]) -> parâmetro repetido
   channels: (params = {}) =>
-    req(`p/${encodeURIComponent(_token)}/channels.json?${new URLSearchParams(params)}`),
+    req(`p/${encodeURIComponent(_token)}/channels.json?${qs(params)}`),
+  // lista leve dos canais de 1+ segmentos (2º menu da TV ao vivo)
+  channelNames: (params = {}) =>
+    req(`p/${encodeURIComponent(_token)}/channels/names?${qs(params)}`),
   channelCategories: () => req(`p/${encodeURIComponent(_token)}/channels/categories`),
   channelLanguages: () => req(`p/${encodeURIComponent(_token)}/channels/languages`),
   channelDetail: (tvgId) => req(`p/${encodeURIComponent(_token)}/channels/${encodeURIComponent(tvgId)}`),
